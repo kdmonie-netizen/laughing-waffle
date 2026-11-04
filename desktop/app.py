@@ -51,6 +51,9 @@ ALLOWED_HOSTS = {
     "celestrak.org",
     "api.nasa.gov",
     "kauai.ccmc.gsfc.nasa.gov",
+    "navcen.uscg.gov",  # GPS outage file + advisory (no CORS)
+    "www.gsc-europa.eu",  # Galileo constellation status (no CORS)
+    "services2.arcgis.com",  # NOAA CORS stations (has CORS; proxy is only a fallback)
 }
 PROXY_CACHE_S = 120
 HAND_EDIT_GRACE_S = 60
@@ -173,7 +176,7 @@ def fetch_upstream(url):
             return hit[1], hit[2], hit[3], "HIT"
     req = urllib.request.Request(url, headers={"User-Agent": "kjm-gps-conditions", "Accept-Encoding": "identity"})
     try:
-        with _urlopen(req, timeout=20) as r:
+        with _urlopen(req, timeout=30) as r:
             body = r.read()
             status = r.status
             ctype = r.headers.get("Content-Type", "application/octet-stream")

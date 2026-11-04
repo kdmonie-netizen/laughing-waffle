@@ -39,7 +39,31 @@ export const SOURCES = {
   lascoC3Frames: `${SWPC}/products/animations/lasco-c3.json`,
   lascoC2Frames: `${SWPC}/products/animations/lasco-c2.json`,
   suvi304Frames: `${SWPC}/products/animations/suvi-primary-304.json`,
-  drapImage: `${SWPC}/images/animations/d-rap/global/d-rap/latest.png`,
+  // (the old .../d-rap/global/d-rap/latest.png path is 404 since at least Nov 2026)
+  drapImage: `${SWPC}/images/animations/d-rap/global/latest.png`,
+  glotecAnomFrames: `${SWPC}/products/animations/glotec/anomcus_urt.json`,
+  wamIpeFrames: `${SWPC}/products/animations/wam-ipe/wfs_ionosphere_new.json`,
+
+  // --- NOAA SWPC: added in 1.2.0 ----------------------------------------------
+  // GloTEC: measured ionosphere (TEC) on a 5° x 2.5° grid every 10 min. The
+  // index lists every frame for ~30 days (~0.5 MB); each frame is ~2.5 MB.
+  glotecIndex: `${SWPC}/products/glotec/geojson_2d_urt.json`,
+  dst: `${SWPC}/products/kyoto-dst.json`,
+  kpModel: `${SWPC}/json/geospace/geospace_pred_est_kp_1_hour.json`,
+  propagated: `${SWPC}/products/geospace/propagated-solar-wind-1-hour.json`,
+  daypre: `${SWPC}/text/3-day-solar-geomag-predictions.txt`,
+
+  // --- Satellite health from the operators (no CORS: read via /api/proxy) ---
+  navcenOA: 'https://navcen.uscg.gov/sites/default/files/gps/opsadvisory/current_opsadvisory.oa1',
+  // The outage file is the authority (see health.js); ~360 KB, changes with each NANU.
+  navcenSof: 'https://navcen.uscg.gov/sites/default/files/gps/sof/current_sof.sof',
+  galileoStatus: 'https://www.gsc-europa.eu/system-service-status/constellation-information',
+
+  // --- NOAA NGS CORS network (ArcGIS layer behind the NGS CORS map) --------
+  corsLayer: 'https://services2.arcgis.com/C8EMgrsFcRFL6LrL/arcgis/rest/services/NOAA_CORS_Network_view/FeatureServer/2',
+
+  // --- FAA WAAS (an image; no data feed) ------------------------------------
+  waasImage: 'https://www.nstb.tc.faa.gov/incoming/vplbig.png',
 
   // --- NASA CCMC DONKI: CMEs and their WSA-Enlil arrival simulations -------
   // DEMO_KEY works for light use (rate-limited per IP). Get a free key at
@@ -67,13 +91,38 @@ export const CROSS_CHECK_LINKS = [
   },
   {
     name: 'SpaceWeatherLive: Kp index',
-    url: 'https://www.spaceweatherlive.com/en/auroral-activity/the-kp-index.html',
-    note: 'Kp history and forecast charts. SpaceWeatherLive also uses NOAA/DSCOVR data.',
+    url: 'https://www.spaceweatherlive.com/en/auroral-activity/kp-index.html',
+    note: 'Kp history and forecast charts. SpaceWeatherLive also uses NOAA data.',
   },
   {
-    name: 'SpaceWeatherLive: solar wind',
-    url: 'https://www.spaceweatherlive.com/en/solar-activity/solar-wind.html',
-    note: 'Live Bz / speed / density panels for a second look.',
+    name: 'US Coast Guard NAVCEN: GPS constellation status',
+    url: 'https://navcen.uscg.gov/gps-constellation',
+    note: 'The official list of GPS outages and NANUs. This app reads its daily advisory.',
+  },
+  {
+    name: 'Galileo (GSC): constellation status',
+    url: 'https://www.gsc-europa.eu/system-service-status/constellation-information',
+    note: 'Which Galileo satellites are usable. This app reads this table.',
+  },
+  {
+    name: 'GLONASS IAC: constellation status',
+    url: 'https://glonass-iac.ru/en/sostavOG/',
+    note: 'GLONASS health. Not read by the app (the site refuses automated requests), so check it here.',
+  },
+  {
+    name: 'FAA WAAS performance (NSTB)',
+    url: 'https://www.nstb.tc.faa.gov/',
+    note: 'WAAS/SBAS service maps and satellite status, updated every few minutes.',
+  },
+  {
+    name: 'NGS CORS map',
+    url: 'https://geodesy.noaa.gov/CORS_Map/',
+    note: 'Every CORS station, its data and coordinates, for OPUS and post-processing.',
+  },
+  {
+    name: 'GPSJam: GNSS interference map',
+    url: 'https://gpsjam.org/',
+    note: 'Daily map of GPS interference seen by aircraft. About a day behind.',
   },
   {
     name: 'SpaceWeatherLive: solar flares',
@@ -91,9 +140,9 @@ export const CROSS_CHECK_LINKS = [
     note: 'Real-time global ionospheric Total Electron Content map.',
   },
   {
-    name: 'NOAA CTIPe TEC forecast',
-    url: 'https://www.swpc.noaa.gov/products/ctipe-total-electron-content-forecast',
-    note: 'Physics-model ionosphere forecast. TEC gradients drive GPS error.',
+    name: 'NOAA WAM-IPE ionosphere forecast',
+    url: 'https://www.swpc.noaa.gov/products/wam-ipe',
+    note: 'Physics-model ionosphere forecast (replaced CTIPe). TEC gradients drive GPS error.',
   },
   {
     name: 'NOAA Geospace magnetosphere model',

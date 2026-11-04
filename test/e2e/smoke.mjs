@@ -51,6 +51,53 @@ const texts = {
   '27-day-outlook.txt': H.outlook27Text(now, Array.from({ length: 27 }, (_, i) => [150 + i, [5, 8, 12, 25, 6][i % 5], [2, 3, 4, 5, 2][i % 5]])),
   'discussion.txt': ':Product: Forecast Discussion\n(TEST DATA)',
 };
+// ---- 1.2.0 sources: synthetic, timed from `now` so the freshness rules apply
+import { readFileSync } from 'node:fs';
+const FX = (n) => readFileSync(new URL(`../fixtures/${n}`, import.meta.url), 'utf8');
+const jday = (d) => {
+  const doy = Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - Date.UTC(d.getUTCFullYear(), 0, 0)) / 86400000);
+  return `${String(doy).padStart(3, '0')}/${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}`;
+};
+const MON = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
+const msgDate = (d) => `${String(d.getUTCDate()).padStart(2, '0')}${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}Z ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+// Plant the outage on a satellite that is actually over Denver (the default site) now.
+const { buildSatrecs, visibleSatellites } = await import('../../public/js/gnss.js');
+const { DEFAULT_SETTINGS } = await import('../../public/js/config.js');
+const overhead = visibleSatellites(buildSatrecs({ GPS: H.syntheticGpsTLE(now) }), now, DEFAULT_SETTINGS.lat, DEFAULT_SETTINGS.lon, 0, DEFAULT_SETTINGS.elevationMask);
+const OUT_PRN = /PRN (\d+)/.exec(overhead[0].name)[1];
+const SCHED_PRN = OUT_PRN === '08' ? '09' : '08';
+const yesterday = new Date(+now - 86400000);
+const tomorrow = new Date(+now + 86400000);
+// PRN 07 out until further notice since yesterday (nothing closes it); PRN 08 scheduled tomorrow.
+const navcenOA = [
+  'GPS OPERATIONAL ADVISORY        999.OA1',
+  'SUBJ: GPS STATUS      TEST',
+  '2. CURRENT ADVISORIES AND FORECASTS :',
+  'A. FORECASTS:',
+  `2026901       ${msgDate(yesterday)}    ${SCHED_PRN}   FCSTMX       ${jday(tomorrow)}-${jday(new Date(+tomorrow + 6 * 3600000))}`,
+  'B. ADVISORIES:',
+  `2026900       ${msgDate(yesterday)}    ${OUT_PRN}   UNUSUFN      ${jday(yesterday)}-/`,
+].join('\n');
+const glotecFrame = { ...JSON.parse(FX('glotec-frame-cut.geojson')), time_tag: new Date(+now - 15 * 60000).toISOString() };
+const propagated = [['time_tag', 'speed', 'density', 'temperature', 'bx', 'by', 'bz', 'bt', 'vx', 'vy', 'vz', 'propagated_time_tag']];
+for (let m = 60; m >= 0; m--) propagated.push([new Date(+now - m * 60000).toISOString(), storm ? 720 : 380, 5, 1e5, 1, 2, storm ? -16 : 1, storm ? 22 : 5, -400, 0, 0, new Date(+now - m * 60000 + 52 * 60000).toISOString()]);
+Object.assign(routes, {
+  'kyoto-dst.json': Array.from({ length: 24 }, (_, i) => ({ time_tag: new Date(+now - (24 - i) * 3600000).toISOString().slice(0, 13) + ':00:00', dst: storm ? -60 - i * 2 : -8 })),
+  'geospace_pred_est_kp_1_hour.json': Array.from({ length: 100 }, (_, i) => ({ model_prediction_time: new Date(+now + (i - 55) * 60000).toISOString().slice(0, 16) + ':00Z', k: storm ? 6.33 : 1.33 })),
+  'propagated-solar-wind-1-hour.json': propagated,
+  'geojson_2d_urt.json': [{ url: '/products/glotec/geojson_2d_urt/glotec_icao_TEST.geojson', time_tag: glotecFrame.time_tag }],
+  'glotec_icao_TEST.geojson': glotecFrame,
+  'query': JSON.parse(FX('cors-query.json')),
+  'anomcus_urt.json': frames,
+  'wfs_ionosphere_new.json': frames,
+});
+Object.assign(texts, {
+  '3-day-solar-geomag-predictions.txt': FX('3-day-solar-geomag-predictions.txt'),
+  'current_opsadvisory.oa1': navcenOA,
+  'current_sof.sof': FX('navcen-sof-2026.xml'),
+  'constellation-information': FX('gsc-constellation-table.html'),
+});
+
 const donkiEnlil = [{ simulationID: 'TEST-ENLIL', estimatedShockArrivalTime: new Date(+now + 5 * 86400000).toISOString(), isEarthGB: false, kp_18: 5, kp_90: 6, kp_135: 7, kp_180: 7, cmeInputs: [{ cmeStartTime: new Date(+now - 86400000).toISOString(), speed: 1100, halfAngle: 40 }], link: 'https://example.invalid' }];
 const donkiCme = [{ time21_5: new Date(+now - 86400000).toISOString(), speed: 1100, halfAngle: 40, latitude: 5, longitude: -10, type: 'O', isMostAccurate: true }];
 
@@ -59,18 +106,25 @@ const page = await browser.newPage({ viewport: { width: 1360, height: 900 }, dev
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`${m.type()}: ${m.text()}`); });
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
-await page.route(/^https:\/\//, async (route) => {
-  const u = new URL(route.request().url());
+const badResponses = [];
+page.on('response', (r) => { if (r.status() >= 400) badResponses.push(`${r.status()} ${r.url()}`); });
+// Hosts without CORS (NAVCEN, GSC) go through the local server's /api/proxy;
+// answer those here too, from the same synthetic data, so nothing live leaks in.
+await page.route(/\/api\/proxy\?url=/, (route) => serve(route, new URL(new URL(route.request().url()).searchParams.get('url'))));
+await page.route(/^https:\/\//, (route) => serve(route, new URL(route.request().url())));
+async function serve(route, u) {
   const file = u.pathname.split('/').pop();
   if (u.hostname === 'celestrak.org') return route.fulfill({ body: u.search.includes('gps-ops') ? H.syntheticGpsTLE(now) : '', contentType: 'text/plain' });
   if (u.pathname.includes('WSAEnlil')) return route.fulfill({ json: donkiEnlil });
   if (u.pathname.includes('CMEAnalysis')) return route.fulfill({ json: donkiCme });
-  if (routes[file]) return route.fulfill({ json: routes[file] });
-  if (texts[file]) return route.fulfill({ body: texts[file], contentType: 'text/plain' });
+  const cors = { 'Access-Control-Allow-Origin': '*' };
+  if (u.pathname.includes('d-rap')) return route.fulfill({ status: 404, body: 'gone' }); // exercises the image-failure path
+  if (routes[file]) return route.fulfill({ json: routes[file], headers: cors });
+  if (texts[file]) return route.fulfill({ body: texts[file], contentType: file === 'constellation-information' ? 'text/html' : 'text/plain', headers: cors });
   if (file.endsWith('.png')) return route.fulfill({ body: svgFrame(file), contentType: 'image/svg+xml' });
   console.log('UNROUTED', u.href);
   return route.fulfill({ status: 404, body: 'nope' });
-});
+}
 const BASE = process.env.SMOKE_URL || 'http://localhost:8099/';
 await page.goto(BASE);
 await page.waitForFunction(() => window.gpsdash?.state?.result, null, { timeout: 20000 });
@@ -116,8 +170,8 @@ check(L1.on && L1.pressed === 'true' && L1.stored === null, 'Learn mode is on by
 check(L1.visible >= 30, `explanation boxes visible (${L1.visible})`);
 check(!L1.emptyTopics.length, `every section box has text (${L1.emptyTopics.join(',') || 'none empty'})`);
 check(/^Today gets an? [A-F]\./.test(L1.today), `today box: "${L1.today}"`);
-check(L1.statLines === 8 && L1.dayLines >= 3 && L1.hourLine.length > 10, `tile/day/hour lines (${L1.statLines}/${L1.dayLines}, "${L1.hourLine}")`);
-check(L1.story === 5 && L1.gloss === 19 && L1.quiz === 6, `Space Weather 101: ${L1.story} steps, ${L1.gloss} words, ${L1.quiz} questions`);
+check(L1.statLines === 11 && L1.dayLines >= 3 && L1.hourLine.length > 10, `tile/day/hour lines (${L1.statLines}/${L1.dayLines}, "${L1.hourLine}")`);
+check(L1.story === 5 && L1.gloss === 22 && L1.quiz === 6, `Space Weather 101: ${L1.story} steps, ${L1.gloss} words, ${L1.quiz} questions`);
 await page.evaluate(() => scrollTo(0, 0));
 await page.screenshot({ path: `shot-${scenario}-learn-on-full.png`, fullPage: true });
 await page.locator('#learn').screenshot({ path: `shot-${scenario}-learn-section.png` });
@@ -162,6 +216,48 @@ await page.locator('#quiz').screenshot({ path: `shot-${scenario}-quiz.png` });
 await page.locator('#quizReset').click();
 check(/Score: 0 of 6/.test(await page.evaluate(() => document.getElementById('quizScore').textContent)), 'Try again resets the quiz');
 
+// ---------------------------------------------------------- 1.2.0 sources
+await page.locator('#sats').scrollIntoViewIfNeeded();
+const v12 = await page.evaluate(() => {
+  const tiles = Object.fromEntries([...document.querySelectorAll('#nowStats .stat')].map((t) => [t.querySelector('.k').textContent, t.querySelector('.v').textContent]));
+  return {
+    tiles,
+    health: document.getElementById('healthList').textContent,
+    satNote: document.getElementById('satNote').textContent,
+    cors: document.querySelectorAll('#corsList .item').length,
+    corsFirst: document.querySelector('#corsList .item b')?.textContent,
+    midLat: document.getElementById('midLat').textContent,
+    arrive: document.getElementById('magArrive').textContent,
+    waasHidden: document.getElementById('waasImg').hidden,
+    drapHidden: document.getElementById('drapImg').hidden,
+    drapNote: document.getElementById('drapImg').parentElement.querySelector('.img-note')?.textContent || '',
+    players: ['glotecPlayer', 'wamPlayer'].map((id) => document.querySelector(`#${id} .player-img`)?.getAttribute('src') || ''),
+    feedsFail: [...document.querySelectorAll('#feedStatus .feed.fail')].map((f) => f.textContent),
+  };
+});
+console.log('1.2.0:', JSON.stringify(v12));
+check(/TECU/.test(v12.tiles['Ionosphere (TEC)'] || ''), `TEC tile: ${v12.tiles['Ionosphere (TEC)']}`);
+check(/nT/.test(v12.tiles['Dst (storm depth)'] || ''), `Dst tile: ${v12.tiles['Dst (storm depth)']}`);
+check(/^\d/.test(v12.tiles['Kp next hour (model)'] || ''), `model Kp tile: ${v12.tiles['Kp next hour (model)']}`);
+check(new RegExp(`Left out of PDOP now[\\s\\S]*GPS PRN ${OUT_PRN}`).test(v12.health) && new RegExp(`Scheduled[\\s\\S]*PRN ${SCHED_PRN}`).test(v12.health) && /E18 \(GSAT0201\)/.test(v12.health), `health list: PRN ${OUT_PRN} out, PRN ${SCHED_PRN} scheduled, Galileo E18 out`);
+check(!/PRN 11|PRN 25/.test(v12.health), 'stale advisory lines (PRN 11, 25) are not shown as out');
+check(/\+1 left out by operator notices/.test(v12.satNote), `PRN ${OUT_PRN} is overhead and left out of the count: ${v12.satNote}`);
+check(v12.cors === 6, `CORS list: ${v12.cors} stations, nearest ${v12.corsFirst}`);
+check(/Lower 48[\s\S]*Minor storm/.test(v12.midLat), 'mid-latitude odds table');
+check(/reaches Earth at about/.test(v12.arrive), `arrival note: ${v12.arrive}`);
+check(!v12.waasHidden, 'WAAS map shown');
+check(v12.drapHidden && /unavailable/.test(v12.drapNote), 'failed D-RAP image hides and says so');
+check(v12.players.every((s) => s.length > 0), 'GloTEC + WAM-IPE players have frames');
+check(!v12.feedsFail.length, `no failed feeds (${v12.feedsFail.join(', ') || 'none'})`);
+// The old D-RAP bug: after a failed image, the next refresh threw and skipped the aurora map + CME lists.
+const errsBefore = errors.length;
+await page.locator('#refreshBtn').click();
+await page.waitForFunction(() => !document.getElementById('refreshBtn').disabled, null, { timeout: 30000 });
+await page.waitForTimeout(1500);
+check(errors.slice(errsBefore).every((e) => !e.startsWith('pageerror')), `refresh after a failed image throws nothing (${errors.slice(errsBefore).join(' | ') || 'clean'})`);
+await page.locator('#sats').screenshot({ path: `shot-${scenario}-sats.png` });
+await page.locator('#field').screenshot({ path: `shot-${scenario}-field.png` });
+
 // Switch off, survives a reload.
 await page.locator('#learnBtn').click();
 let L2 = await learnState();
@@ -195,6 +291,10 @@ await page.screenshot({ path: `shot-${scenario}-mobile-glossary.png`, fullPage: 
 check(await page.evaluate(() => document.getElementById('termDialog').open), 'glossary pop-up works on a phone');
 
 console.log('console:', errors.slice(0, 20));
+// Every failed request must be one this test caused on purpose (the D-RAP image).
+const unexpected = badResponses.filter((r) => !/d-rap/.test(r));
+check(!unexpected.length, `no unexpected failed requests (${unexpected.join(' | ') || 'none'}; ${badResponses.length} intended D-RAP 404s)`);
 console.log(fails.length ? `LEARN CHECKS FAILED: ${fails.length}` : 'ALL LEARN CHECKS PASSED');
 await browser.close();
-process.exitCode = fails.length || errors.some((e) => e.startsWith('pageerror') || e.startsWith('error')) ? 1 : 0;
+// "Failed to load resource" console lines are the intended D-RAP 404s, checked above by URL.
+process.exitCode = fails.length || errors.some((e) => e.startsWith('pageerror') || (e.startsWith('error') && !/Failed to load resource/.test(e))) ? 1 : 0;

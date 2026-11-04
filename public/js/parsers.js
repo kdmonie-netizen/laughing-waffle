@@ -339,3 +339,136 @@ export function parseTLE(text) {
   }
   return out;
 }
+
+// ------------------------------------------------- added in 1.2.0 (4 Nov 2026)
+
+/** Kyoto Dst via SWPC (products/kyoto-dst.json): hourly storm depth, nT. */
+export function parseDst(json) {
+  return toRows(json)
+    .map((r) => ({ time: parseTime(r.time_tag), dst: num(r.dst) }))
+    .filter((r) => r.time && r.dst !== null)
+    .sort((a, b) => a.time - b.time);
+}
+
+/** Geospace model estimated Kp (json/geospace/geospace_pred_est_kp_1_hour.json). Runs ~45 min ahead. */
+export function parseKpModel(json) {
+  return toRows(json)
+    .map((r) => ({ time: parseTime(r.model_prediction_time || r.time_tag), kp: num(pick(r, 'k', 'kp')) }))
+    .filter((r) => r.time && r.kp !== null)
+    .sort((a, b) => a.time - b.time);
+}
+
+/** L1 solar wind with the time it reaches Earth (products/geospace/propagated-solar-wind-1-hour.json). */
+export function parsePropagated(json) {
+  return toRows(json)
+    .map((r) => ({
+      time: parseTime(r.time_tag),
+      arrival: parseTime(r.propagated_time_tag),
+      speed: num(r.speed),
+      bz: num(r.bz),
+      bt: num(r.bt),
+    }))
+    .filter((r) => r.time && r.arrival)
+    .sort((a, b) => a.time - b.time);
+}
+
+/**
+ * 3-day Space Weather Predictions (text/3-day-solar-geomag-predictions.txt):
+ * mid-latitude K forecast and storm probabilities, which fit the lower 48
+ * better than the planetary numbers.
+ */
+export function parseDaypre(text) {
+  const src = String(text || '').replace(/\r/g, '');
+  const dm = /:Prediction_dates:\s+(.+)/.exec(src);
+  const dates = [];
+  if (dm) for (const m of dm[1].matchAll(/(\d{4})\s+([A-Za-z]{3})\s+(\d{1,2})/g)) dates.push(utcDate(+m[1], MONTHS[m[2].toLowerCase()], +m[3]));
+  const row = (label) => {
+    for (const line of src.split('\n')) {
+      const parts = line.trim().split(/\s+/);
+      if (parts[0] === label && parts.length === 4 && parts.slice(1).every((p) => /^\d+$/.test(p))) return parts.slice(1).map(Number);
+    }
+    return null;
+  };
+  const midK = [];
+  for (const m of src.matchAll(/^Mid\/(\d\d)-(\d\d)UT\s+(\d+)\s+(\d+)\s+(\d+)\s*$/gm)) midK.push({ slot: `${m[1]}-${m[2]}`, k: [+m[3], +m[4], +m[5]] });
+  return {
+    issued: parseIssued(src),
+    dates,
+    midK,
+    midKMax: midK.length ? [0, 1, 2].map((i) => Math.max(...midK.map((r) => r.k[i]))) : null,
+    probMid: { active: row('Mid/Active'), minor: row('Mid/Minor_Storm'), major: row('Mid/Major-Severe_Storm') },
+    probHigh: { active: row('High/Active'), minor: row('High/Minor_Storm'), major: row('High/Major-Severe_Storm') },
+  };
+}
+
+/** Great-circle distance, km. */
+export function distanceKm(lat1, lon1, lat2, lon2) {
+  const R = 6371.0088;
+  const r = Math.PI / 180;
+  const dLat = (lat2 - lat1) * r;
+  const dLon = (lon2 - lon1) * r;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * r) * Math.cos(lat2 * r) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+}
+
+const lon180 = (lon) => ((((lon + 180) % 360) + 360) % 360) - 180;
+
+/**
+ * NOAA CORS network (ArcGIS layer behind NGS's CORS map). The layer stores
+ * longitude as 0–360° east and mixes in decommissioned sites, so the query
+ * asks for status = 'Operational' in a box around the site.
+ */
+export function corsQueryUrl(base, lat, lon, boxDeg = 1.5) {
+  const lon360 = ((lon % 360) + 360) % 360;
+  const dLon = Math.min(60, boxDeg / Math.max(0.2, Math.cos((lat * Math.PI) / 180)));
+  const where = `status='Operational' AND lat BETWEEN ${lat - boxDeg} AND ${lat + boxDeg} AND lon BETWEEN ${lon360 - dLon} AND ${lon360 + dLon}`;
+  const q = new URLSearchParams({ where, outFields: 'siteid,agency,sampling,gnss,avail,lat,lon', returnGeometry: 'false', f: 'json' });
+  return `${base}/query?${q}`;
+}
+
+export function parseCors(json, lat, lon) {
+  return (json?.features || [])
+    .map((f) => f.attributes || {})
+    .filter((a) => a.siteid && Number.isFinite(a.lat) && Number.isFinite(a.lon))
+    .map((a) => {
+      const sLon = lon180(a.lon);
+      return {
+        site: String(a.siteid).slice(0, 4),
+        id: String(a.siteid),
+        agency: a.agency || '',
+        sampling: num(a.sampling),
+        gnss: String(a.gnss || '').split(',').map((s) => s.trim()).filter(Boolean),
+        avail: a.avail || '',
+        lat: a.lat,
+        lon: sLon,
+        km: distanceKm(lat, lon, a.lat, sLon),
+      };
+    })
+    .sort((a, b) => a.km - b.km);
+}
+
+/**
+ * GloTEC (products/glotec/geojson_2d_urt/*.geojson): the grid cell nearest
+ * the site. Grid is 5° lon × 2.5° lat; properties tec (TECU), anomaly (TECU
+ * vs. the recent normal), quality_flag.
+ */
+export function glotecNearest(geojson, lat, lon) {
+  let best = null;
+  for (const f of geojson?.features || []) {
+    const c = f?.geometry?.coordinates;
+    if (!c || f.properties?.tec == null) continue;
+    const km = distanceKm(lat, lon, c[1], lon180(c[0]));
+    if (!best || km < best.km) best = { km, f };
+  }
+  if (!best) return null;
+  const p = best.f.properties;
+  return {
+    time: parseTime(geojson.time_tag),
+    tec: num(p.tec),
+    anomaly: num(p.anomaly),
+    quality: num(p.quality_flag),
+    cellLat: best.f.geometry.coordinates[1],
+    cellLon: lon180(best.f.geometry.coordinates[0]),
+    km: best.km,
+  };
+}

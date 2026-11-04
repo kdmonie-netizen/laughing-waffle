@@ -1,0 +1,14 @@
+[
+ {
+  "url": "/products/glotec/geojson_2d_urt/glotec_icao_20261104T213500Z.geojson",
+  "time_tag": "2026-11-04T21:35:00Z"
+ },
+ {
+  "url": "/products/glotec/geojson_2d_urt/glotec_icao_20261104T214500Z.geojson",
+  "time_tag": "2026-11-04T21:45:00Z"
+ },
+ {
+  "url": "/products/glotec/geojson_2d_urt/glotec_icao_20261104T215500Z.geojson",
+  "time_tag": "2026-11-04T21:55:00Z"
+ }
+]

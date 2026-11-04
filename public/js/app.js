@@ -1,4 +1,4 @@
-import { SOURCES, CROSS_CHECK_LINKS, CACHE_TTL, DEFAULT_SETTINGS, PROFILES } from './config.js';
+import { SOURCES, CROSS_CHECK_LINKS, CACHE_TTL, DEFAULT_SETTINGS, PROFILES, SWPC } from './config.js';
 import { fetchJSON, fetchText, loadAll } from './fetch.js';
 import * as P from './parsers.js';
 import { gradeConditions, gradeFor } from './grading.js';
@@ -10,6 +10,7 @@ import { FramePlayer } from './sims/player.js';
 import { drawAuroraMap, loadLand } from './sims/aurora.js';
 import { dbmArrival, enlilEarthArrivals, cmeAnalyses, CmeAnimation } from './sims/cme.js';
 import * as L from './explain.js';
+import { parseNavcenOA, parseSof, parseGalileoStatus, buildHealth } from './health.js';
 
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -64,7 +65,29 @@ const LOADERS = {
   ovation: (force) => fetchJSON(SOURCES.ovation, { force }),
   donkiEnlil: (force) => fetchJSON(donkiUrl(SOURCES.donkiEnlil, 7), { force, ttl: CACHE_TTL.donki, persist: true }),
   donkiCme: (force) => fetchJSON(donkiUrl(SOURCES.donkiCme, 10) + '&mostAccurateOnly=true', { force, ttl: CACHE_TTL.donki, persist: true }),
+  // added in 1.2.0
+  dst: (force) => fetchJSON(SOURCES.dst, { force, ttl: 30 * 60000 }),
+  kpModel: (force) => fetchJSON(SOURCES.kpModel, { force }),
+  propagated: (force) => fetchJSON(SOURCES.propagated, { force }),
+  daypre: (force) => fetchText(SOURCES.daypre, { force, ttl: CACHE_TTL.text }),
+  glotec: (force) => loadGlotec(force),
+  navcenOA: (force) => fetchText(SOURCES.navcenOA, { force, ttl: CACHE_TTL.text, persist: true, proxyFirst: true }),
+  navcenSof: (force) => fetchText(SOURCES.navcenSof, { force, ttl: 3 * 3600000, proxyFirst: true }),
+  galileoStatus: (force) => fetchText(SOURCES.galileoStatus, { force, ttl: 3600000, proxyFirst: true }),
+  cors: (force) => fetchJSON(P.corsQueryUrl(SOURCES.corsLayer, settings.lat, settings.lon), { force, ttl: 24 * 3600000, persist: true }),
 };
+
+// GloTEC: the index (~0.5 MB, refreshed every 10 min) names the newest frame;
+// each frame (~2.5 MB) is fetched once and only the latest is kept.
+let glotecFrame = { url: null, data: null };
+async function loadGlotec(force) {
+  const idx = await fetchJSON(SOURCES.glotecIndex, { force, ttl: 10 * 60000 });
+  const last = Array.isArray(idx) ? idx[idx.length - 1] : null;
+  if (!last?.url) throw new Error('GloTEC index is empty');
+  const url = new URL(last.url, SWPC).href;
+  if (glotecFrame.url !== url) glotecFrame = { url, data: await fetchJSON(url, { memo: false, ttl: 0 }) };
+  return glotecFrame.data;
+}
 
 function donkiUrl(base, daysBack) {
   const d = (n) => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
@@ -93,7 +116,8 @@ function computeGeometry() {
   }
   const start = new Date();
   start.setHours(0, 0, 0, 0);
-  state.geometry = geometryTimeline(state.sats, start, 72, 10, settings.lat, settings.lon, settings.elevationMask);
+  state.geometry = geometryTimeline(state.sats, start, 72, 10, settings.lat, settings.lon, settings.elevationMask, state.health?.usable || null);
+  state.geometryHealthKey = state.health?.key || '';
 }
 
 function parseAll(raw) {
@@ -120,8 +144,25 @@ function parseAll(raw) {
   p.ovation = safe(P.parseOvation, raw.ovation);
   p.enlil = safe(enlilEarthArrivals, raw.donkiEnlil) || [];
   p.cmes = safe(cmeAnalyses, raw.donkiCme) || [];
+  p.dst = safe(P.parseDst, raw.dst) || [];
+  p.kpModel = safe(P.parseKpModel, raw.kpModel) || [];
+  p.propagated = safe(P.parsePropagated, raw.propagated) || [];
+  p.daypre = safe(P.parseDaypre, raw.daypre);
+  p.glotec = raw.glotec || null;
+  p.cors = safe((j) => P.parseCors(j, settings.lat, settings.lon), raw.cors) || [];
+  // Health lists: a page that parses to nothing has changed shape, which
+  // means "unknown", never "every satellite is fine".
+  p.oa = safe(parseNavcenOA, raw.navcenOA);
+  p.sof = safe(parseSof, raw.navcenSof);
+  if (p.sof && !p.sof.outages.length) p.sof = null;
+  p.galileo = safe(parseGalileoStatus, raw.galileoStatus);
+  if (p.galileo && !p.galileo.length) p.galileo = null;
   return p;
 }
+
+// A live reading older than this is "no recent data", never "calm": NOAA's
+// real-time feeds do go quiet (SWPC news, 22 Sep 2026: RTSW and GOES-18 out).
+const FRESH_MIN = 90;
 
 function realtime(p) {
   const now = Date.now();
@@ -129,9 +170,17 @@ function realtime(p) {
     const v = arr.filter((r) => now - r.time <= mins * 60000 && r[key] != null).map((r) => r[key]);
     return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
   };
-  const last = (arr, key) => {
+  const newest = (arr, key) => {
     for (let i = arr.length - 1; i >= 0; i--) if (arr[i][key] != null) return arr[i];
     return null;
+  };
+  const last = (arr, key) => {
+    const r = newest(arr, key);
+    return r && now - r.time <= FRESH_MIN * 60000 ? r : null;
+  };
+  const age = (arr, key) => {
+    const r = newest(arr, key);
+    return r ? (now - r.time) / 60000 : null;
   };
   const xr = last(p.xray, 'flux');
   const pr = last(p.protons, 'flux');
@@ -148,6 +197,7 @@ function realtime(p) {
     protonFlux: pr?.flux ?? null,
     sNow: pr ? P.sScaleFromFlux(pr.flux) : 0,
     aurora: p.ovation ? p.ovation.at(settings.lat, settings.lon) : null,
+    ages: { wind: age(p.plasma, 'speed'), mag: age(p.mag, 'bz'), xray: age(p.xray, 'flux'), protons: age(p.protons, 'flux'), kp: age(p.kp1m, 'kp') },
   };
 }
 
@@ -158,7 +208,9 @@ async function refresh({ force = false } = {}) {
   state.raw = data;
   for (const k of Object.keys(LOADERS)) state.errors[k] = errors[k];
   state.parsed = parseAll(data);
-  if (!state.geometry.length || force) computeGeometry();
+  const p = state.parsed;
+  state.health = buildHealth({ oa: p.oa, sof: p.sof, galileo: p.galileo });
+  if (!state.geometry.length || force || state.health.key !== state.geometryHealthKey) computeGeometry();
   regrade();
   renderAll();
   $('refreshBtn').disabled = false;
@@ -190,6 +242,8 @@ function renderAll() {
   renderCharts();
   renderScales();
   renderSats();
+  renderMidLat();
+  renderField();
   renderSims();
   renderAlerts();
   renderFeeds();
@@ -199,14 +253,25 @@ function renderAll() {
 function renderErrors() {
   const core = ['kpForecast', 'scales', 'plasma', 'mag'];
   const failed = core.filter((k) => state.errors[k]);
-  const box = $('errors');
-  if (!failed.length) {
-    box.hidden = true;
-    return;
+  const msgs = [];
+  if (failed.length) {
+    const fileHint = location.protocol === 'file:' ? ' You opened the file directly. Run <code>npm start</code> and open http://localhost:8080 instead.' : '';
+    msgs.push(`Couldn’t reach some NOAA feeds (${failed.join(', ')}). The grade is built from whatever did load.${fileHint}`);
   }
-  box.hidden = false;
-  const fileHint = location.protocol === 'file:' ? ' You opened the file directly. Run <code>npm start</code> and open http://localhost:8080 instead.' : '';
-  box.innerHTML = `Couldn’t reach some NOAA feeds (${failed.join(', ')}). The grade is built from whatever did load.${fileHint}`;
+  const a = state.rt?.ages || {};
+  const stale = [
+    ['solar wind speed', a.wind],
+    ['magnetic field (Bz)', a.mag],
+    ['X-ray flares', a.xray],
+    ['protons', a.protons],
+  ].filter(([, m]) => m != null && m > FRESH_MIN);
+  if (stale.length) {
+    const fmtAge = (m) => (m < 120 ? `${Math.round(m)} min` : `${(m / 60).toFixed(1)} h`);
+    msgs.push(`No recent ${stale.map(([n, m]) => `${n} (last reading ${fmtAge(m)} ago)`).join(', ')}. NOAA’s live feed has gone quiet, so these are left out of the grade until it comes back. That is “unknown”, not “calm”.`);
+  }
+  const box = $('errors');
+  box.hidden = !msgs.length;
+  box.innerHTML = msgs.map((m) => `<div>${m}</div>`).join('');
 }
 
 function gClass(grade) {
@@ -253,6 +318,10 @@ function renderToday() {
     sats: L.statKid('sats', geoNow ? { count: geoNow.count, pdop: geoNow.pdop } : null),
     mlat: L.statKid('mlat', r.mlat),
   };
+  const ex = extraNow();
+  kid.tec = L.statKid('tec', ex.tec);
+  kid.dst = L.statKid('dst', ex.dst?.dst ?? null);
+  kid.kpNext = L.statKid('kpNext', ex.kpNext);
   const stats = [
     { k: 'Kp now (est.)', v: rt.kpNow?.toFixed(2) ?? '–', d: rt.kpNow != null ? `G${P.gScaleFromKp(rt.kpNow)} storm scale` : 'no data', c: kpC, kid: kid.kp },
     { k: 'IMF Bz (30 min)', v: rt.bz30 != null ? `${rt.bz30.toFixed(1)} nT` : '–', d: rt.bz30 == null ? '' : rt.bz30 < -10 ? 'strongly south' : rt.bz30 < -3 ? 'south: loading' : 'north/neutral', c: rt.bz30 == null ? null : rt.bz30 < -10 ? css('--bad') : rt.bz30 < -3 ? css('--fair') : css('--good'), kid: kid.bz },
@@ -260,6 +329,9 @@ function renderToday() {
     { k: 'X-ray', v: P.flareClass(rt.xrayFlux), d: rt.rNow ? `R${rt.rNow} radio blackout` : 'no blackout', c: rt.rNow >= 3 ? css('--bad') : rt.rNow ? css('--fair') : css('--good'), kid: kid.xray },
     { k: 'Protons ≥10 MeV', v: rt.protonFlux != null ? `${rt.protonFlux < 10 ? rt.protonFlux.toFixed(2) : Math.round(rt.protonFlux)} pfu` : '–', d: rt.sNow ? `S${rt.sNow} radiation storm` : 'below S1', c: rt.sNow ? css('--poor') : css('--good'), kid: kid.protons },
     { k: 'Aurora overhead', v: rt.aurora != null ? `${Math.round(rt.aurora)}%` : '–', d: 'OVATION at your site', c: rt.aurora == null ? null : rt.aurora >= 30 ? css('--bad') : rt.aurora >= 10 ? css('--fair') : css('--good'), kid: kid.aurora },
+    { k: 'Ionosphere (TEC)', v: ex.tec?.tec != null ? `${ex.tec.tec.toFixed(1)} TECU` : '–', d: ex.tec ? `${ex.tec.anomaly != null ? `${ex.tec.anomaly >= 0 ? '+' : ''}${ex.tec.anomaly.toFixed(1)} vs normal · ` : ''}GloTEC ${fmtTime(ex.tec.time)}` : 'no data', c: ex.tec?.anomaly == null ? null : ex.tec.anomaly > 10 ? css('--bad') : ex.tec.anomaly > 3 ? css('--fair') : css('--good'), kid: kid.tec },
+    { k: 'Dst (storm depth)', v: ex.dst ? `${Math.round(ex.dst.dst)} nT` : '–', d: ex.dst ? `Kyoto, ${fmtTime(ex.dst.time)}` : 'no data', c: ex.dst == null ? null : ex.dst.dst <= -100 ? css('--bad') : ex.dst.dst <= -50 ? css('--poor') : ex.dst.dst <= -30 ? css('--fair') : css('--good'), kid: kid.dst },
+    { k: 'Kp next hour (model)', v: ex.kpNext != null ? ex.kpNext.toFixed(1) : '–', d: ex.kpNext != null ? `NOAA Geospace, to ${fmtTime(ex.kpNextUntil)}` : 'no data', c: ex.kpNext == null ? null : kpColor(ex.kpNext), kid: kid.kpNext },
     { k: 'Satellites / PDOP', v: geoNow ? `${geoNow.count} / ${Number.isFinite(geoNow.pdop) ? geoNow.pdop.toFixed(1) : '∞'}` : '–', d: geoNow ? `above ${settings.elevationMask}° mask` : 'element sets loading', c: geoNow ? (geoNow.pdop > 4 ? css('--fair') : css('--good')) : null, kid: kid.sats },
     { k: 'Magnetic latitude', v: `${r.mlat.toFixed(1)}°`, d: latitudeBand(r.mlat), c: null, kid: kid.mlat },
   ];
@@ -276,6 +348,22 @@ function renderToday() {
     : '<li>Nothing significant. Quiet space weather and good geometry.</li>';
 
   $('todayLearn').innerHTML = L.todayKid(today, now) + `<p><a href="#learn">${L.NEW_HERE}</a></p>`;
+}
+
+/** Display-only readings added in 1.2.0 (not part of the grade). */
+function extraNow() {
+  const p = state.parsed;
+  const now = Date.now();
+  const tec = p.glotec ? P.glotecNearest(p.glotec, settings.lat, settings.lon) : null;
+  const dstRow = p.dst.at(-1);
+  const dst = dstRow && now - dstRow.time < 3 * 3600000 ? dstRow : null;
+  const ahead = p.kpModel.filter((r) => r.time >= now);
+  return {
+    tec: tec && now - tec.time < 2 * 3600000 ? tec : null,
+    dst,
+    kpNext: ahead.length ? Math.max(...ahead.map((r) => r.kp)) : null,
+    kpNextUntil: ahead.length ? ahead[ahead.length - 1].time : null,
+  };
 }
 
 function nearestGeometry(t) {
@@ -391,6 +479,12 @@ function renderCharts() {
     thresholds: [{ value: 0, label: '0', color: css('--muted') }, { value: -10, label: 'Bz −10', color: css('--poor') }],
     now,
   });
+  // When what L1 measures now reaches Earth (NOAA propagates it with the wind speed).
+  const pr = p.propagated.at(-1);
+  $('magArrive').textContent =
+    pr && now - pr.time < FRESH_MIN * 60000
+      ? `What the spacecraft measures now reaches Earth at about ${fmtTime(pr.arrival)} (${Math.round((pr.arrival - pr.time) / 60000)} min later)${pr.bz != null ? `, with Bz ${pr.bz.toFixed(1)} nT` : ''}.`
+      : '';
 
   drawChart($('windChart'), {
     series: [
@@ -457,20 +551,21 @@ function renderSats() {
   $('maskInput').value = settings.elevationMask;
 
   const now = new Date();
-  const vis = state.sats.length ? visibleSatellites(state.sats, now, settings.lat, settings.lon, 0, settings.elevationMask) : [];
+  const { vis, excluded } = skyNow(now);
   const d = dop(vis);
   const counts = {};
   for (const v of vis) counts[v.constellation] = (counts[v.constellation] || 0) + 1;
   const tleErr = Object.entries(state.errors).filter(([k, v]) => k.startsWith('tle:') && v);
   $('satNote').textContent = state.sats.length
-    ? `${vis.length} in view now · PDOP ${Number.isFinite(d.pdop) ? d.pdop.toFixed(2) : '∞'} · HDOP ${Number.isFinite(d.hdop) ? d.hdop.toFixed(2) : '∞'} · VDOP ${Number.isFinite(d.vdop) ? d.vdop.toFixed(2) : '∞'}`
+    ? `${vis.length} in view now${excluded.length ? ` (+${excluded.length} left out by operator notices)` : ''} · PDOP ${Number.isFinite(d.pdop) ? d.pdop.toFixed(2) : '∞'} · HDOP ${Number.isFinite(d.hdop) ? d.hdop.toFixed(2) : '∞'} · VDOP ${Number.isFinite(d.vdop) ? d.vdop.toFixed(2) : '∞'}`
     : tleErr.length
       ? `Couldn’t load element sets (${tleErr.map(([k]) => k.slice(4)).join(', ')})`
       : 'Loading element sets…';
   $('skyLegend').innerHTML = Object.entries(counts)
     .map(([c, n]) => `<span><span class="sw" style="background:${CONST_COLORS[c]}"></span>${c} ${n}</span>`)
     .join('');
-  drawSkyplot($('skyplot'), vis);
+  drawSkyplot($('skyplot'), vis, excluded);
+  renderHealth();
 
   const g = state.geometry;
   drawChart($('dopChart'), {
@@ -485,7 +580,48 @@ function renderSats() {
   });
 }
 
-function drawSkyplot(canvas, vis) {
+/** Satellites above the mask now, split into usable and left out by operator notices. */
+function skyNow(now = new Date()) {
+  const all = state.sats.length ? visibleSatellites(state.sats, now, settings.lat, settings.lon, 0, settings.elevationMask) : [];
+  const usable = state.health?.usable;
+  if (!usable) return { vis: all, excluded: [] };
+  const vis = [];
+  const excluded = [];
+  for (const v of all) (usable(v, now) ? vis : excluded).push(v);
+  return { vis, excluded };
+}
+
+function renderHealth() {
+  const h = state.health;
+  const box = $('healthList');
+  if (!h) {
+    box.innerHTML = '';
+    return;
+  }
+  const when = (d) => (d ? `${fmtDay(d)} ${fmtTime(d)}` : '');
+  const row = (e) =>
+    `<li><b>${esc(e.constellation)} ${esc(e.id)}</b>: ${esc(e.why)}${e.since ? `, from ${esc(when(e.since))}` : ''}${e.until ? ` to ${esc(when(e.until))}` : e.since ? ', no end time yet' : ''}${e.nanu ? ` <span class="muted small">(notice ${esc(e.nanu)})</span>` : ''}</li>`;
+  const parts = [];
+  parts.push(
+    h.excludedNow.length
+      ? `<p><b>Left out of PDOP now:</b></p><ul>${h.excludedNow.map(row).join('')}</ul>`
+      : `<p>No satellite is out of service right now${h.known.GPS || h.known.Galileo ? '' : ' (as far as we can tell)'}.</p>`,
+  );
+  if (h.scheduled.length) parts.push(`<p><b>Scheduled in the next 7 days:</b></p><ul>${h.scheduled.map(row).join('')}</ul>`);
+  if (h.notes.length) parts.push(`<ul class="muted">${h.notes.map(row).join('')}</ul>`);
+  const src = [];
+  src.push(
+    h.known.GPS
+      ? `GPS: US Coast Guard NAVCEN${state.parsed.sof?.created ? ` (outage file of ${fmtDay(state.parsed.sof.created)})` : ''}${h.known.GPSconfirmed ? '' : ', advisory only'}.`
+      : 'GPS: NAVCEN’s notices didn’t load, so every GPS satellite counts. (They need the desktop app or npm start.)',
+  );
+  src.push(h.known.Galileo ? 'Galileo: European GNSS Service Centre.' : 'Galileo: the GSC status table didn’t load, so every Galileo satellite counts.');
+  src.push('GLONASS and BeiDou: no open health feed, so every satellite counts. Check GLONASS on its own site (Sources).');
+  parts.push(`<p class="muted small">${src.join(' ')}</p>`);
+  box.innerHTML = parts.join('');
+}
+
+function drawSkyplot(canvas, vis, excluded = []) {
   const dpr = window.devicePixelRatio || 1;
   const S = canvas.clientWidth;
   if (!S) return;
@@ -517,6 +653,22 @@ function drawSkyplot(canvas, vis) {
     const a = (az * Math.PI) / 180;
     ctx.fillText(l, c + (R + 10) * Math.sin(a) - 4, c - (R + 10) * Math.cos(a) + 4);
   });
+  // Satellites the operators say not to use: hollow gray rings.
+  for (const s of excluded) {
+    const r = R * (1 - s.el / 90);
+    const a = (s.az * Math.PI) / 180;
+    const x = c + r * Math.sin(a);
+    const y = c - r * Math.cos(a);
+    ctx.strokeStyle = css('--muted');
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(x, y, 6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.fillStyle = css('--muted');
+    const short = (s.name.match(/PRN\s*(\w+)/)?.[1] || s.name.match(/^(GSAT\d+)/)?.[1] || s.name).slice(0, 8);
+    ctx.fillText(`${short} out`, x + 8, y + 4);
+  }
   for (const s of vis) {
     const r = R * (1 - s.el / 90);
     const a = (s.az * Math.PI) / 180;
@@ -637,14 +789,14 @@ async function renderSims() {
 
   // Frame players (built once per refresh of the frame lists)
   const hemi = settings.lat < 0 ? 'ovationSouthFrames' : 'ovationNorthFrames';
-  const players = { enlilPlayer: 'enlilFrames', ovationPlayer: hemi, lascoPlayer: 'lascoC3Frames', suviPlayer: 'suvi304Frames' };
+  const players = { enlilPlayer: 'enlilFrames', ovationPlayer: hemi, lascoPlayer: 'lascoC3Frames', suviPlayer: 'suvi304Frames', glotecPlayer: 'glotecAnomFrames', wamPlayer: 'wamIpeFrames' };
   for (const [el, src] of Object.entries(players)) {
     if (state.players[el]?.src === src && Date.now() - state.players[el].t < 30 * 60000) continue;
     fetchJSON(SOURCES[src], { ttl: 15 * 60000 })
       .then((json) => {
         state.players[el]?.player?.pause?.();
         const root = $(el);
-        const player = new FramePlayer(root, P.parseFrames(json), { maxFrames: src === 'enlilFrames' ? 200 : 96 });
+        const player = new FramePlayer(root, P.parseFrames(json), { maxFrames: src === 'enlilFrames' || src === 'wamIpeFrames' ? 200 : 96 });
         state.players[el] = { src, player, t: Date.now() };
         state.errors[src] = undefined;
       })
@@ -654,11 +806,10 @@ async function renderSims() {
         renderFeeds();
       });
   }
-  const drap = $('drapImg');
-  drap.src = `${SOURCES.drapImage}?t=${Math.floor(Date.now() / 600000)}`;
-  drap.onerror = () => {
-    drap.replaceWith(Object.assign(document.createElement('div'), { className: 'muted', textContent: 'D-RAP image unavailable right now.' }));
-  };
+  // Keep the <img> (an earlier version replaced it on error, and the next
+  // refresh then threw on the missing element and skipped the aurora map and
+  // CME lists below).
+  showImage($('drapImg'), `${SOURCES.drapImage}?t=${Math.floor(Date.now() / 600000)}`, 'D-RAP image unavailable right now.');
 
   // Aurora map
   if (!land.length) land = await loadLand();
@@ -695,6 +846,77 @@ async function renderSims() {
     $('dbmRun').dataset.half = c.halfAngle || 35;
     runDbm();
   };
+}
+
+/** Point an <img> at a URL; on failure hide it and show a note beside it (until the next try works). */
+function showImage(img, src, failText) {
+  if (!img) return;
+  let note = img.parentElement.querySelector('.img-note');
+  if (!note) {
+    note = Object.assign(document.createElement('div'), { className: 'img-note muted' });
+    img.parentElement.append(note);
+  }
+  img.onload = () => {
+    img.hidden = false;
+    note.hidden = true;
+  };
+  img.onerror = () => {
+    img.hidden = true;
+    note.hidden = false;
+    note.textContent = failText;
+  };
+  if (img.getAttribute('src') !== src) img.src = src;
+}
+
+/** Mid-latitude (lower 48) storm odds and K forecast from NOAA's 3-day predictions. */
+function renderMidLat() {
+  const d = state.parsed.daypre;
+  const box = $('midLat');
+  if (!d?.probMid?.active || !d.dates.length) {
+    box.innerHTML = '';
+    return;
+  }
+  const day = (i) => (i === 0 ? 'Tomorrow' : d.dates[i].toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' }));
+  const cell = (v) => `<td>${v ?? '–'}%</td>`;
+  box.innerHTML = `<h3>Lower 48 (mid-latitude) odds</h3>
+    <table><thead><tr><th></th>${d.dates.map((_, i) => `<th>${day(i)}</th>`).join('')}</tr></thead><tbody>
+    <tr><td>Active</td>${d.probMid.active.map(cell).join('')}</tr>
+    <tr><td>Minor storm</td>${(d.probMid.minor || []).map(cell).join('')}</tr>
+    <tr><td>Major or severe storm</td>${(d.probMid.major || []).map(cell).join('')}</tr>
+    ${d.midKMax ? `<tr><td>Highest mid-latitude K</td>${d.midKMax.map((k) => `<td>${k}</td>`).join('')}</tr>` : ''}
+    </tbody></table>
+    <p class="muted small">NOAA’s 3-day predictions${d.issued ? `, issued ${fmtDay(d.issued)} ${fmtTime(d.issued)}` : ''}. Shown for reference; the grade uses the planetary Kp forecast scaled to your magnetic latitude.</p>`;
+}
+
+/** Nearest NOAA CORS stations + the FAA WAAS map. */
+function renderField() {
+  const list = state.parsed.cors || [];
+  const mi = (km) => `${(km * 0.621371).toFixed(km < 16 ? 1 : 0)} mi`;
+  $('corsList').innerHTML = list.length
+    ? list
+        .slice(0, 6)
+        .map(
+          (s) => `<div class="item"><b>${esc(s.site)}</b> · ${mi(s.km)} away · ${s.sampling ? `${esc(s.sampling)} s data` : 'rate not listed'} · ${esc(s.gnss.join(' + ') || 'systems not listed')} · ${esc(s.avail || '')}
+          <div class="t">${esc(s.agency)}</div></div>`,
+        )
+        .join('')
+    : `<div class="muted small">${state.errors.cors ? 'The NOAA CORS list didn’t load. Try Refresh, or use the NGS CORS map (Sources).' : 'No operational CORS station within about 100 miles of this site.'}</div>`;
+  $('corsNote').textContent = list.length ? `${list.length} operational nearby, closest ${mi(list[0].km)} · NOAA NGS` : 'For OPUS and post-processing';
+  showImage($('waasImg'), `${SOURCES.waasImage}?t=${Math.floor(Date.now() / 180000)}`, 'The FAA WAAS map is unavailable right now (their site posts occasional outages).');
+}
+
+/** The CORS list depends on the site, so a new location fetches it again. */
+async function refreshCors() {
+  try {
+    state.raw.cors = await LOADERS.cors(false);
+    state.errors.cors = undefined;
+  } catch (e) {
+    state.raw.cors = null;
+    state.errors.cors = String(e.message || e);
+  }
+  state.parsed.cors = state.raw.cors ? P.parseCors(state.raw.cors, settings.lat, settings.lon) : [];
+  renderField();
+  renderFeeds();
 }
 
 function renderAlerts() {
@@ -905,6 +1127,7 @@ function setupControls() {
     state.players.ovationPlayer = null;
     regrade();
     renderAll();
+    refreshCors();
   });
 
   $('constToggles').addEventListener('change', async (e) => {
@@ -943,7 +1166,8 @@ function boot() {
   }, 60000);
   window.addEventListener('resize', () => {
     if (!state.result) return;
-    drawSkyplot($('skyplot'), state.sats.length ? visibleSatellites(state.sats, new Date(), settings.lat, settings.lon, 0, settings.elevationMask) : []);
+    const { vis, excluded } = skyNow();
+    drawSkyplot($('skyplot'), vis, excluded);
     drawAuroraMap($('auroraMap'), state.parsed.ovation, land, settings);
   });
 }

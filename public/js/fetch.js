@@ -50,22 +50,59 @@ async function rawFetch(url, timeoutMs = 20000) {
 /**
  * Fetch a URL as text with caching and proxy fallback.
  * @param {string} url
- * @param {{ttl?: number, persist?: boolean, force?: boolean}} opts
+ * A server error (HTTP 5xx, e.g. CelesTrak's occasional 500) is retried once
+ * after 1.5 s. A network/CORS failure goes straight to the proxy. Other HTTP
+ * errors (404) are not retried.
+ * `memo: false` keeps the body out of the in-memory cache (for big one-off
+ * files such as GloTEC frames, which would otherwise pile up in a long-open tab).
+ * @param {string} url
+ * `proxyFirst: true` is for hosts known to send no CORS headers (NAVCEN, the
+ * Galileo GSC): the browser can't read them directly, so skip that attempt.
+ * Proxied requests get 45 s, longer than the server's own 30 s upstream limit,
+ * so the page never gives up on an answer the server is still fetching.
+ * @param {{ttl?: number, persist?: boolean, force?: boolean, memo?: boolean, proxyFirst?: boolean}} opts
  */
-export async function fetchText(url, { ttl = CACHE_TTL.default, persist = false, force = false } = {}) {
+export async function fetchText(url, { ttl = CACHE_TTL.default, persist = false, force = false, memo = true, proxyFirst = false } = {}) {
   const now = Date.now();
   const key = `gpsdash:${url}`;
   if (!force) {
-    const hit = memory.get(url) || (persist ? storageGet(key) : null);
+    const hit = (memo && memory.get(url)) || (persist ? storageGet(key) : null);
     if (hit && now - hit.t < ttl) return hit.body;
   }
 
   let body;
+  const viaProxy = () => rawFetch(`api/proxy?url=${encodeURIComponent(url)}`, 45000);
+  if (proxyFirst) {
+    try {
+      if (!(await probeProxy())) throw new Error('needs the local server (desktop app or npm start): this site sends no CORS headers');
+      body = await viaProxy();
+    } catch (e) {
+      const stale = (memo && memory.get(url)) || storageGet(key);
+      if (stale) return stale.body;
+      throw e;
+    }
+    const entry = { t: now, body };
+    if (memo) memory.set(url, entry);
+    if (persist) storageSet(key, entry);
+    return body;
+  }
   try {
     body = await rawFetch(url);
-  } catch (directErr) {
-    if (await probeProxy()) {
-      body = await rawFetch(`api/proxy?url=${encodeURIComponent(url)}`);
+  } catch (firstErr) {
+    let directErr = firstErr;
+    if (/^HTTP 5\d\d/.test(String(firstErr?.message))) {
+      await new Promise((r) => setTimeout(r, 1500));
+      try {
+        body = await rawFetch(url);
+        directErr = null;
+      } catch (e) {
+        directErr = e;
+      }
+    }
+    if (!directErr) {
+      // the retry worked
+    } else if (await probeProxy()) {
+      body = await viaProxy();
     } else {
       // Fall back to a stale cached copy rather than nothing.
       const stale = memory.get(url) || storageGet(key);
@@ -74,7 +111,7 @@ export async function fetchText(url, { ttl = CACHE_TTL.default, persist = false,
     }
   }
   const entry = { t: now, body };
-  memory.set(url, entry);
+  if (memo) memory.set(url, entry);
   if (persist) storageSet(key, entry);
   return body;
 }

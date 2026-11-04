@@ -22,6 +22,9 @@ const ALLOWED_HOSTS = new Set([
   'celestrak.org',
   'api.nasa.gov',
   'kauai.ccmc.gsfc.nasa.gov',
+  'navcen.uscg.gov',
+  'www.gsc-europa.eu',
+  'services2.arcgis.com',
 ]);
 
 const TYPES = {
@@ -54,7 +57,7 @@ async function proxy(req, res, target) {
     return res.end(hit.body);
   }
   try {
-    const r = await fetch(url, { headers: { 'user-agent': 'gps-conditions-dashboard' }, signal: AbortSignal.timeout(20000) });
+    const r = await fetch(url, { headers: { 'user-agent': 'gps-conditions-dashboard' }, signal: AbortSignal.timeout(30000) });
     const body = Buffer.from(await r.arrayBuffer());
     const type = r.headers.get('content-type') || 'application/octet-stream';
     if (r.ok) cache.set(url.href, { t: Date.now(), status: r.status, type, body });

@@ -292,3 +292,14 @@ body.learn-on .day .learn, body.learn-on .hour-detail .learn { font-size: 0.92re
 .quiz-why.ok b { color: var(--good); }
 .quiz-why.no b { color: var(--bad); }
 .quiz-score { font-size: 1.05rem; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* ---- 1.2.0: health, CORS/WAAS, arrival note -------------------------- */
+.arrive { color: var(--muted); margin-top: 6px; }
+.health { font-size: 0.9rem; }
+.health ul { margin: 4px 0 8px; padding-left: 20px; }
+.health li { margin: 3px 0; }
+.health p { margin: 6px 0; }
+.player-frame.waas { aspect-ratio: 6 / 5; background: #fff; }
+.img-note { padding: 16px; text-align: center; }
+.errors > div + div { margin-top: 6px; }
+#midLat table { margin-top: 4px; }

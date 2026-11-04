@@ -23,12 +23,17 @@ export function buildSatrecs(tleTextByConstellation) {
   return sats;
 }
 
-/** Look angles (deg) for every satellite above the mask at `date`. */
-export function visibleSatellites(sats, date, lat, lon, heightKm = 0, maskDeg = 10) {
+/**
+ * Look angles (deg) for every satellite above the mask at `date`.
+ * `usable(sat, date)` (optional) leaves out satellites the operators have
+ * declared unusable at that time (see health.js).
+ */
+export function visibleSatellites(sats, date, lat, lon, heightKm = 0, maskDeg = 10, usable = null) {
   const observer = { latitude: lat * D2R, longitude: lon * D2R, height: heightKm };
   const gmst = satellite.gstime(date);
   const out = [];
   for (const s of sats) {
+    if (usable && !usable(s, date)) continue;
     const pv = satellite.propagate(s.satrec, date);
     if (!pv || !pv.position) continue;
     const ecf = satellite.eciToEcf(pv.position, gmst);
@@ -96,12 +101,12 @@ export function dop(visible) {
 }
 
 /** Sampled sats-in-view / PDOP series from `start` for `hours`. */
-export function geometryTimeline(sats, start, hours, stepMin, lat, lon, maskDeg) {
+export function geometryTimeline(sats, start, hours, stepMin, lat, lon, maskDeg, usable = null) {
   const out = [];
   const steps = Math.floor((hours * 60) / stepMin);
   for (let i = 0; i <= steps; i++) {
     const t = new Date(start.getTime() + i * stepMin * 60000);
-    const vis = visibleSatellites(sats, t, lat, lon, 0, maskDeg);
+    const vis = visibleSatellites(sats, t, lat, lon, 0, maskDeg, usable);
     const d = dop(vis);
     const byConst = {};
     for (const v of vis) byConst[v.constellation] = (byConst[v.constellation] || 0) + 1;

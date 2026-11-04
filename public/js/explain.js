@@ -82,6 +82,18 @@ export const GLOSSARY = {
     word: 'TEC',
     text: 'TEC means total electron content. It counts how many charged bits are in the high air between you and a satellite. More of them slow GPS signals down more. Your receiver can fix some of this, but fast changes are hard to fix.',
   },
+  waas: {
+    word: 'WAAS',
+    text: 'WAAS is a helper for GPS over North America. Stations on the ground check the GPS signals all day. Then a satellite sends out fixes for the errors. Many drones, planes and handheld GPS units use it. It does not help RTK, which has its own base.',
+  },
+  cors: {
+    word: 'CORS',
+    text: 'A CORS is a GPS receiver that never moves. It sits on a known spot and records the signals all day, every day. Surveyors use its data to check their own work. NOAA’s OPUS tool uses these stations to find an exact spot from your GPS file.',
+  },
+  dst: {
+    word: 'Dst',
+    text: 'Dst tells how deep a space storm is. It is measured near the equator in nT, a tiny unit of magnet strength. Near zero means calm. Below minus 50 is a storm. Below minus 100 is a big storm. After a storm, Dst climbs back up slowly, over a day or two.',
+  },
   noaa: {
     word: 'NOAA',
     text: 'NOAA is the U.S. agency that watches the weather and the oceans. Its Space Weather Prediction Center watches the Sun around the clock. It sends out the forecasts this app uses.',
@@ -215,6 +227,24 @@ export function statKid(key, v) {
         : v.pdop <= 4
           ? `${v.count} satellites, spread out okay.`
           : `${v.count} satellites, but bunched up. Not great.`;
+    case 'tec':
+      if (v == null) return 'No reading right now.';
+      if (v.anomaly == null) return 'Shows how much charged air is over you.';
+      if (v.anomaly > 10) return 'Much more charged air than normal. GPS errors grow.';
+      if (v.anomaly > 3) return 'A bit more charged air than normal.';
+      if (v.anomaly < -3) return 'Less charged air than normal. That is fine for GPS.';
+      return 'About normal for this time of day.';
+    case 'dst':
+      if (v == null) return 'No reading right now.';
+      if (v > -30) return 'No storm. Earth’s magnet field is quiet.';
+      if (v > -50) return 'A small dip. Not quite a storm.';
+      if (v > -100) return 'A space storm is going on.';
+      return 'A big space storm is going on!';
+    case 'kpNext':
+      if (v == null) return 'No forecast right now.';
+      if (v < 4) return 'A computer model of space says the next hour looks calm.';
+      if (v < 5) return 'The model says the next hour gets a little bumpy.';
+      return 'The model says a storm is coming in the next hour.';
     case 'mlat': {
       const a = Math.abs(v);
       if (a >= 60) return 'You are close to the magnetic pole. Storms hit you hard.';
@@ -262,6 +292,16 @@ export const SECTIONS = {
     `This map shows where the high air is soaking up radio waves after a ${term('flare', 'flare')} or ${term('protons', 'proton storm')}. Colored areas are having radio trouble. GPS can be noisy there too.`,
   cme:
     `When the Sun throws a ${term('cme', 'CME')}, scientists use computer models to guess when it will reach Earth. Pick one from the list and press Simulate. The model shows the cloud slowing down as it pushes through the ${term('solarwind', 'solar wind')}, like a ball slowing down in water.`,
+  health:
+    `Sometimes a satellite is broken or being fixed. Its owner then tells everyone not to use it. This app reads those notices for ${term('gps', 'GPS')} and Galileo. It leaves those satellites out, just like your receiver does. Gray rings on the sky circle are left out.`,
+  cors:
+    `These are the ${term('cors', 'CORS')} stations nearest your job site. Each one is a GPS that never moves. Closer stations help most when you send your data to OPUS. The list also shows which satellite systems each one tracks.`,
+  waas:
+    `This map from the FAA shows how well ${term('waas', 'WAAS')} is working over North America. Dark blue is good. Red means WAAS can’t help much there. Inside the yellow line, WAAS works its best. Drones and handheld GPS units use WAAS. RTK does not.`,
+  glotecMap:
+    `This map shows the ${term('ionosphere', 'high air')} over the United States, compared with the last 30 days. Orange and brown mean more charged air than usual. Purple means less. Big orange patches slow GPS signals more and make errors grow.`,
+  wamipe:
+    `This is a computer forecast of the ${term('ionosphere', 'high air')} for the whole Earth. It looks ahead about a day. Look at the top left map. Bright yellow means lots of charged air, where GPS signals slow down the most. In the bottom left map, red means more than normal and blue means less.`,
   alerts:
     'These are the official warnings from the space weather forecasters. A watch means something might happen. A warning means it is about to happen. An alert means it is happening now.',
   discussion:

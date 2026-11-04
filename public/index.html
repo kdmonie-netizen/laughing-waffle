@@ -35,6 +35,7 @@
     <a href="#outlook">45-day outlook</a>
     <a href="#live">Live data</a>
     <a href="#sats">Satellites</a>
+    <a href="#field">CORS &amp; WAAS</a>
     <a href="#sims">Simulations</a>
     <a href="#alerts">Alerts</a>
     <a href="#sources">Sources</a>
@@ -101,6 +102,7 @@
         <div class="learn" data-topic="magChart"></div>
         <canvas class="chart" id="magChart"></canvas>
         <div class="legend"><span class="sw" style="background:var(--bad)"></span>Bz (southward = negative = bad) <span class="sw" style="background:var(--muted)"></span>Bt total</div>
+        <div class="arrive small" id="magArrive"></div>
       </div>
       <div class="card">
         <div class="card-head"><h2>Solar wind speed &amp; density</h2></div>
@@ -124,6 +126,7 @@
         <div class="card-head"><h2>NOAA scales: today &amp; next 2 days</h2></div>
         <div class="learn" data-topic="scales"></div>
         <div id="scalesTable"></div>
+        <div id="midLat"></div>
       </div>
     </section>
 
@@ -148,6 +151,23 @@
           <canvas class="chart tall" id="dopChart"></canvas>
           <div class="legend"><span class="sw" style="background:var(--accent)"></span>PDOP (lower is better; &gt;4 hurts RTK) <span class="sw" style="background:var(--good)"></span>Satellites in view ÷ 5</div>
         </div>
+      </div>
+      <h3>Satellite health from the operators</h3>
+      <div class="learn" data-topic="health"></div>
+      <div id="healthList" class="health"></div>
+    </section>
+
+    <!-- ===== CORS + WAAS ===== -->
+    <section id="field" class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Nearest NOAA CORS stations</h2><span class="muted small" id="corsNote">For OPUS and post-processing</span></div>
+        <div class="learn" data-topic="cors"></div>
+        <div id="corsList" class="list"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>WAAS coverage (FAA)</h2><span class="muted small">Vertical protection level, updated every few minutes</span></div>
+        <div class="learn" data-topic="waas"></div>
+        <div class="player-frame waas"><img id="waasImg" alt="FAA WAAS vertical navigation service map of North America" /></div>
       </div>
     </section>
 
@@ -238,6 +258,30 @@
           <div class="card-head"><h2>D-RAP: HF radio absorption</h2><span class="muted small">Shows where flares/protons are hitting the ionosphere</span></div>
           <div class="learn" data-topic="drap"></div>
           <div class="player-frame"><img id="drapImg" alt="NOAA D-RAP global absorption map" /></div>
+        </div>
+
+        <div class="card player" id="glotecPlayer">
+          <div class="card-head"><h2>Ionosphere over the US: GloTEC anomaly</h2><span class="muted small">Measured TEC vs. the 30-day median, every 10 min</span></div>
+          <div class="learn" data-topic="glotecMap"></div>
+          <div class="player-frame"><img class="player-img" alt="NOAA GloTEC TEC anomaly map of the United States" /></div>
+          <div class="player-bar">
+            <button class="player-play" aria-label="Play">▶</button>
+            <input type="range" class="player-range" min="0" max="0" value="0" aria-label="Frame" />
+            <select class="player-speed" aria-label="Speed"><option value="4">0.5×</option><option value="8" selected>1×</option><option value="16">2×</option></select>
+          </div>
+          <div class="player-time muted small"></div>
+        </div>
+
+        <div class="card player" id="wamPlayer">
+          <div class="card-head"><h2>Ionosphere forecast: WAM-IPE</h2><span class="muted small">NOAA physics model, about a day ahead</span></div>
+          <div class="learn" data-topic="wamipe"></div>
+          <div class="player-frame"><img class="player-img" alt="NOAA WAM-IPE global ionosphere forecast" /></div>
+          <div class="player-bar">
+            <button class="player-play" aria-label="Play">▶</button>
+            <input type="range" class="player-range" min="0" max="0" value="0" aria-label="Frame" />
+            <select class="player-speed" aria-label="Speed"><option value="4">0.5×</option><option value="8" selected>1×</option><option value="16">2×</option></select>
+          </div>
+          <div class="player-time muted small"></div>
         </div>
       </div>
 
@@ -465,7 +509,7 @@
   </dialog>
 
   <footer class="muted small">
-    Data: NOAA SWPC, NASA CCMC DONKI, CelesTrak. Not affiliated with any of them. Refreshes every 5 minutes while open.
+    Data: NOAA SWPC and NGS, NASA CCMC DONKI, CelesTrak, US Coast Guard NAVCEN, the European GNSS Service Centre and the FAA. Not affiliated with any of them. Refreshes every 5 minutes while open.
   </footer>
 
   <script type="module" src="js/app.js"></script>
