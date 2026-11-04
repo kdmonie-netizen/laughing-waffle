@@ -1,5 +1,6 @@
 // Browser smoke test with SYNTHETIC data (no live NOAA access needed).
 // Usage: PORT=8099 node server.js &   then   node test/e2e/smoke.mjs storm|quiet
+// SMOKE_URL=http://127.0.0.1:5569/ tests another server (e.g. the desktop app.py).
 // PW_CHANNEL=chrome uses the installed Google Chrome instead of Playwright's own Chromium.
 // Screenshots are written to the current directory (shot-*.png).
 import { createRequire } from 'node:module';
@@ -70,7 +71,8 @@ await page.route(/^https:\/\//, async (route) => {
   console.log('UNROUTED', u.href);
   return route.fulfill({ status: 404, body: 'nope' });
 });
-await page.goto('http://localhost:8099/');
+const BASE = process.env.SMOKE_URL || 'http://localhost:8099/';
+await page.goto(BASE);
 await page.waitForFunction(() => window.gpsdash?.state?.result, null, { timeout: 20000 });
 await page.waitForTimeout(1500);
 const info = await page.evaluate(() => {

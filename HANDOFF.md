@@ -126,3 +126,17 @@ The smoke test intercepts every external request and serves synthetic data in th
 - **NASA DONKI** (CME list and modelled arrivals) answered 503 and then 429 "too many requests" on the shared `DEMO_KEY`. A free personal key from https://api.nasa.gov goes in `nasaApiKey` in `config.js`. Signing up is the owner's call.
 - SpaceWeatherLive and Spaceweather Horizon have no open data feeds, so they're cross-check links, not data sources.
 - To publish the site: merge to `main`, then go to GitHub → Settings → Pages → Source: GitHub Actions (`.github/workflows/pages.yml` is already there).
+
+## 8. The office app (Dropbox) - added 4 Nov 2026
+
+The owner asked for it to be "a proper app like the rest on Dropbox". It follows `Dropbox\Apps\_APP STANDARD\APP PACKAGING PROTOCOL.txt` (read that first if you change the launcher).
+
+- **Office copy:** `~\Dropbox\Apps\KJM GPS Conditions\` - root = `Launch KJM GPS Conditions.vbs` + `README - HOW THIS WORKS.txt`; `app\` (app.py, icon, release.json, public\); `help\` (this file as HANDOFF.md, the developer README, deploys.log). **Never rename the launcher**: desktop icons point at that filename.
+- **Port 5560**, recorded in the protocol's port registry. The server binds 127.0.0.1 only.
+- **This git repo is the master.** Never edit the Dropbox copy by hand; change the repo, commit, then run `python -B desktop/package_to_dropbox.py` (dry run) and `--go`. The packager refuses a dirty tree, runs `npm test` and the desktop tests, refuses changed app files without a version bump, prunes inside app\ and help\ only, stamps every file with the deploy time, writes `app\release.json` last, appends `help\deploys.log`, and prints dev vs live `MATCH`.
+- **Version:** `APP_VERSION` in `desktop/app.py` = `version` in `package.json` (a test checks). Bump both for every release that changes app files, as the last edit before the final test run.
+- **Updates reach PCs through the icon:** the launcher compares `/api/version` with `app\app.py` on disk and restarts an older server. No "open the Dropbox folder" step for anyone.
+- **Release seal:** until every file listed in `release.json` is on the PC (size + SHA-256) and `app.py` names the same version, `/` shows "Dropbox is still downloading an update" (reloads every 5 s) and `/api/version` says `<v>-updating`. A listed file saved over 60 s after release.json is treated as a hand edit and doesn't hold the page, unless app.py's version disagrees (a half-delivered release). Tests: `desktop/tests/test_app.py` (19, including the negative controls).
+- **No watchdog:** nobody depends on it all day, so it isn't armed.
+- **Per-PC files:** `%LOCALAPPDATA%\KJM GPS Conditions\` (launcher.log, server.log). Claude's tools see a shadow of %LOCALAPPDATA% (MSIX virtualisation), so check a running server over HTTP, not by reading those files.
+- `server.js` stays for `npm start`, GitHub Pages work and the smoke test; its allow-list must match app.py's (a test checks). `SMOKE_URL=http://127.0.0.1:<port>/` points the smoke test at the Python server.

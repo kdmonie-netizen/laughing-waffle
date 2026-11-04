@@ -1,3 +1,6 @@
 node_modules/
 .DS_Store
 *.log
+desktop/__pycache__/
+desktop/tests/__pycache__/
+__pycache__/

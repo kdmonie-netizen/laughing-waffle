@@ -63,6 +63,17 @@ Opening `public/index.html` straight from disk won't work, because browsers bloc
 
 Set your work location with the 📍 button (or "Use my current location") and pick a work profile. Settings are saved in your browser.
 
+### The office app (Dropbox)
+
+The office runs it like every other KJM app: **`Dropbox\Apps\KJM GPS Conditions\Launch KJM GPS Conditions.vbs`**. The launcher puts a desktop icon on each PC, starts a small Python server (standard library only, no installs) on `127.0.0.1:5560`, and opens the browser. When Dropbox brings a newer version, the next icon click restarts onto it.
+
+The desktop pieces live in [`desktop/`](desktop/): `app.py` (the server: the same static files and `/api/proxy` as `server.js`, plus `/api/version` and a release seal), the launcher, its README, the icon, and `package_to_dropbox.py`, which ships this checkout to Dropbox (dry run by default, `--go` to write). See `HANDOFF.md` section 8.
+
+```bash
+python -B -m unittest discover -s desktop/tests     # desktop server + packager tests
+python -B desktop/package_to_dropbox.py             # dry run: checks + plan, writes nothing
+```
+
 ### Host it free on GitHub Pages
 
 The repo includes `.github/workflows/pages.yml`. In GitHub, go to **Settings → Pages → Source: GitHub Actions**. Every push to `main` then publishes `public/`. The browser fetches NOAA, NASA and CelesTrak directly, and all three send CORS headers. If a network blocks that, run `npm start` locally: `server.js` has an allow-listed `/api/proxy` that the page falls back to automatically.
@@ -85,5 +96,6 @@ public/js/geo.js          geomagnetic latitude, sun elevation
 public/js/charts.js       canvas charts
 public/js/sims/           magnetosphere, aurora map, CME/DBM, frame player
 public/vendor/            satellite.js (MIT), Natural Earth land outline. See NOTICE.md
+desktop/                  the office app: Python server, VBS launcher, icon, Dropbox packager, tests
 test/                     node:test unit tests with synthetic fixtures
 ```
