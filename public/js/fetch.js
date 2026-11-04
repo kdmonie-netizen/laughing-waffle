@@ -77,8 +77,10 @@ export async function fetchText(url, { ttl = CACHE_TTL.default, persist = false,
       if (!(await probeProxy())) throw new Error('needs the local server (desktop app or npm start): this site sends no CORS headers');
       body = await viaProxy();
     } catch (e) {
+      // A stale copy is better than nothing, but not for ever: past a day it
+      // is treated as not loaded (for the health lists that means "unknown").
       const stale = (memo && memory.get(url)) || storageGet(key);
-      if (stale) return stale.body;
+      if (stale && now - stale.t < Math.max(ttl * 2, 86400000)) return stale.body;
       throw e;
     }
     const entry = { t: now, body };

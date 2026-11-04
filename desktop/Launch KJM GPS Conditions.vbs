@@ -146,7 +146,9 @@ Function SecondsSince(t0)
     SecondsSince = d
 End Function
 
-EnsureIcon
+' Only a real office copy (app\app.py beside this file) owns the desktop icon:
+' running the launcher from the git dev tree must not repoint it.
+If fso.FileExists(appPath) Then EnsureIcon
 
 ' ---- Reuse the running server if it is current; replace it if the code is newer ----
 running = RunningVersion()

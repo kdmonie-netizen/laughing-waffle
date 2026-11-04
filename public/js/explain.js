@@ -92,7 +92,7 @@ export const GLOSSARY = {
   },
   dst: {
     word: 'Dst',
-    text: 'Dst tells how deep a space storm is. It is measured near the equator in nT, a tiny unit of magnet strength. Near zero means calm. Below minus 50 is a storm. Below minus 100 is a big storm. After a storm, Dst climbs back up slowly, over a day or two.',
+    text: 'Dst tells how deep a space storm is. It is measured near the equator in nT, a tiny unit of magnet strength. Near zero means calm. Below minus 50 is a storm. Below minus 100 is a big storm. After a storm, Dst climbs back up slowly, over a day or two. A sudden jump above zero means a blast of solar wind just hit. A storm may follow.',
   },
   noaa: {
     word: 'NOAA',
@@ -236,6 +236,7 @@ export function statKid(key, v) {
       return 'About normal for this time of day.';
     case 'dst':
       if (v == null) return 'No reading right now.';
+      if (v > 20) return 'A jump up! A blast of solar wind just hit Earth. A storm may follow.';
       if (v > -30) return 'No storm. Earth’s magnet field is quiet.';
       if (v > -50) return 'A small dip. Not quite a storm.';
       if (v > -100) return 'A space storm is going on.';

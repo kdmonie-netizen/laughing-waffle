@@ -15,13 +15,20 @@ Release seal: package_to_dropbox.py writes release.json beside this file with
 the size and SHA-256 of every file it shipped. Dropbox delivers a release file
 by file in no set order, so until every listed file matches, the page is a
 short "finishing an update" notice that reloads itself, and /api/version
-answers "<version>-updating" so the next icon click restarts the server. A
-listed file saved more than 60 s after release.json is a hand edit, not a
-delivery, and doesn't hold the page. No release.json (the git dev tree) means
-no seal.
+answers "<version>-updating" so the next icon click restarts the server.
+
+A listed file that differs and is dated more than 60 s AFTER release.json is
+ambiguous: a hand edit, or the first file of the NEXT release whose
+release.json hasn't arrived yet (Dropbox keeps each file's own date). So it
+holds the page too, but only until the server has watched that same state for
+10 minutes (counted while someone is looking, so a sleeping PC doesn't count);
+after that it is taken as a hand edit and the page opens, so one edited file
+can never lock every PC. Missing files, files dated before release.json, and
+an app.py whose version differs from release.json always hold the page. No
+release.json (the git dev tree) means no seal.
 """
 
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 import hashlib
 import json
@@ -56,7 +63,9 @@ ALLOWED_HOSTS = {
     "services2.arcgis.com",  # NOAA CORS stations (has CORS; proxy is only a fallback)
 }
 PROXY_CACHE_S = 120
-HAND_EDIT_GRACE_S = 60
+HAND_EDIT_LATE_S = 60  # a mismatched file this much newer than release.json may be a hand edit...
+HAND_EDIT_WAIT_S = 600  # ...once this much watched time has passed with no new release.json
+WATCH_GAP_CAP_S = 15  # at most this much counts between two checks (sleep, nobody looking)
 
 TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -81,55 +90,76 @@ def state_dir():
 
 # ------------------------------------------------------------------ release seal
 _seal_lock = threading.Lock()
-_seal_cache = {"key": None, "ok": True, "missing": []}
+_seal_cache = {"key": None, "hard": [], "late": []}
+_late_watch = {"key": None, "waited": 0.0, "last": 0.0}
 
 
-def seal_status():
-    """(ok, problems). ok is True when there is no release.json (dev tree)."""
+def _seal_problems():
+    """(key, hard problems, late problems) for the files on disk now, or None if no release.json."""
     if not RELEASE.is_file():
-        return True, []
+        return None
     try:
         rel_stat = RELEASE.stat()
         manifest = json.loads(RELEASE.read_text(encoding="utf-8"))
         files = manifest["files"]
     except (OSError, ValueError, KeyError) as e:
-        return False, [f"release.json unreadable: {e}"]
+        return ("unreadable", str(e)), [f"release.json unreadable: {e}"], []
     root = HERE.parent  # release.json paths are relative to the app folder root
     stats = []
     for rel in sorted(files):
-        p = root / rel
         try:
-            st = p.stat()
+            st = (root / rel).stat()
             stats.append((rel, st.st_size, st.st_mtime_ns))
         except OSError:
             stats.append((rel, None, None))
     key = (rel_stat.st_mtime_ns, rel_stat.st_size, tuple(stats))
     with _seal_lock:
         if _seal_cache["key"] == key:
-            return _seal_cache["ok"], list(_seal_cache["missing"])
-    problems = []
-    # The app.py on disk must be the release.json's version. This catches both
-    # orders Dropbox can deliver in: new release.json before the new files
-    # (hashes differ), and new files before the new release.json (the new
-    # app.py's version differs, so the hand-edit grace below can't let a
-    # half-delivered release through). Every deploy bumps APP_VERSION.
+            return key, list(_seal_cache["hard"]), list(_seal_cache["late"])
+    hard, late = [], []
+    # app.py must be the version release.json names. Whichever arrives first,
+    # a half-delivered release has the two disagree.
     disk_version = _version_in(HERE / "app.py")
     if manifest.get("version") and disk_version != manifest["version"]:
-        problems.append(f"app.py is {disk_version or '?'}, release.json is {manifest['version']}")
+        hard.append(f"app.py is {disk_version or '?'}, release.json is {manifest['version']}")
     for rel, size, mtime_ns in stats:
         want = files[rel]
         if size is None:
-            problems.append(f"{rel}: not here yet")
+            hard.append(f"{rel}: not here yet")
+        elif size == want["size"] and _sha256(root / rel) == want["sha256"]:
             continue
-        if size == want["size"] and _sha256(root / rel) == want["sha256"]:
-            continue
-        if mtime_ns / 1e9 > rel_stat.st_mtime + HAND_EDIT_GRACE_S:
-            continue  # edited by hand after the release landed: not a delivery
-        problems.append(f"{rel}: still downloading")
-    ok = not problems
+        elif mtime_ns / 1e9 > rel_stat.st_mtime + HAND_EDIT_LATE_S:
+            late.append(f"{rel}: newer than the release (an update arriving, or a hand edit)")
+        else:
+            hard.append(f"{rel}: still downloading")
     with _seal_lock:
-        _seal_cache.update(key=key, ok=ok, missing=problems)
-    return ok, problems
+        _seal_cache.update(key=key, hard=hard, late=late)
+    return key, hard, late
+
+
+def seal_status():
+    """(ok, problems). ok is True when there is no release.json (dev tree)."""
+    found = _seal_problems()
+    if found is None:
+        return True, []
+    key, hard, late = found
+    if hard:
+        return False, hard + late
+    if not late:
+        return True, []
+    # Only files dated after release.json differ. Wait before calling them hand
+    # edits: the next release's release.json may still be on its way.
+    now = time.monotonic()
+    with _seal_lock:
+        if _late_watch["key"] != key:
+            _late_watch.update(key=key, waited=0.0, last=now)
+        else:
+            _late_watch["waited"] += min(max(0.0, now - _late_watch["last"]), WATCH_GAP_CAP_S)
+            _late_watch["last"] = now
+        waited = _late_watch["waited"]
+    if waited >= HAND_EDIT_WAIT_S:
+        return True, []
+    return False, late
 
 
 def _version_in(path):
@@ -163,7 +193,19 @@ the dashboard as soon as every file is here.</p><p style="font-size:.8rem">{coun
 
 # ------------------------------------------------------------------------ proxy
 _proxy_cache = {}
-_urlopen = urllib.request.urlopen  # one seam for tests
+
+
+class _CheckedRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only to another allow-listed https URL."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _, err = check_proxy_target(newurl)
+        if err:
+            raise urllib.error.HTTPError(newurl, 502, f"redirect to a host that isn't allowed: {urllib.parse.urlsplit(newurl).hostname}", headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_urlopen = urllib.request.build_opener(_CheckedRedirect).open  # one seam for tests
 _proxy_lock = threading.Lock()
 
 
@@ -250,7 +292,9 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 return self._send(*err)
             status, ctype, body, cache = fetch_upstream(url)
-            return self._send(status, body, ctype, {"X-Cache": cache})
+            # The page reads these with fetch(); never let an upstream HTML or
+            # SVG body run as a page on this app's own origin.
+            return self._send(status, body, ctype, {"X-Cache": cache, "Content-Security-Policy": "sandbox", "Content-Disposition": "attachment"})
         return self.serve_static(path)
 
     def serve_static(self, path):
@@ -276,8 +320,15 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(200, body, ctype)
 
 
+class _Server(ThreadingHTTPServer):
+    # HTTPServer sets SO_REUSEADDR, which on Windows lets a second copy bind
+    # the same port; then the "already running" check below never fires.
+    allow_reuse_address = False
+    daemon_threads = True
+
+
 def make_server(port=PORT):
-    return ThreadingHTTPServer((HOST, port), Handler)
+    return _Server((HOST, port), Handler)
 
 
 def main():

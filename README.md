@@ -14,11 +14,21 @@ A one-stop GPS/GNSS conditions dashboard. It answers one question: **is today a 
 | USAF/NOAA: 45-day Ap forecast (`json/45-day-forecast.json`) | Daily Ap, F10.7 | +45 days |
 | NOAA SWPC: OVATION aurora | Is the auroral oval (scintillation zone) over your site? | nowcast |
 | NOAA SWPC: WSA-Enlil, OVATION, LASCO C3, SUVI animations, D-RAP | Model and imagery players | Enlil includes forecast days |
+| US Coast Guard NAVCEN: Satellite Outage File + GPS Operational Advisory | Which GPS satellites are out, and scheduled outages. Unusable satellites are left out of PDOP. The outage file is the authority (see `public/js/health.js`) | past outages → +7 days |
+| European GNSS Service Centre: constellation table | Which Galileo satellites are not usable; left out of PDOP | now |
+| NOAA SWPC: GloTEC (`products/glotec/`) | Measured ionosphere TEC and its anomaly at the grid cell nearest your site; CONUS anomaly animation | every 10 min |
+| NOAA SWPC: WAM-IPE | Physics-model ionosphere forecast animation | about +1 day |
+| NOAA SWPC: Kyoto Dst, Geospace model Kp, propagated solar wind | Storm depth now, the model's Kp for the next hour, and when the L1 wind reaches Earth | now → +1 h |
+| NOAA SWPC: 3-day space weather predictions | Mid-latitude (lower 48) storm odds and K forecast | +3 days |
+| NOAA NGS CORS network (ArcGIS layer behind the NGS CORS map) | Nearest operational CORS stations for OPUS / post-processing | current |
+| FAA WAAS (NSTB) | WAAS vertical-navigation service map | every few minutes |
 | NASA CCMC DONKI | CME catalogue + WSA-Enlil predicted Earth arrival times and Kp | next few days |
 | CelesTrak | GPS, Galileo, GLONASS and BeiDou element sets → sky plot, satellites in view, PDOP/HDOP/VDOP | 72 h |
 | Alerts + forecaster discussion | SWPC watches, warnings, alerts | last 48 h |
 
-SpaceWeatherLive and Spaceweather Horizon don't publish open data feeds, so the **Sources** panel deep-links to them for cross-checking. Both are built on the same NOAA/NASA data this app reads directly. The NOAA GPS Community Dashboard, GloTEC, CTIPe and Geospace model pages are linked there as well.
+SpaceWeatherLive and Spaceweather Horizon don't publish open data feeds, so the **Sources** panel deep-links to them for cross-checking. Both are built on the same NOAA/NASA data this app reads directly. The NOAA GPS Community Dashboard, GloTEC, WAM-IPE and Geospace model pages are linked there as well, along with NAVCEN, the Galileo GSC, GLONASS IAC (its site refuses automated requests, so the app can't read it), the FAA WAAS site, the NGS CORS map and GPSJam.
+
+The new readings (TEC, Dst, model Kp, mid-latitude odds, CORS, WAAS) are shown, not graded: there is no published threshold to turn them into points without guessing. Satellite health does change the grade, through PDOP.
 
 ## Simulations
 

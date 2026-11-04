@@ -138,6 +138,43 @@ class DevServerTests(unittest.TestCase):
         self.assertEqual(b[3]["X-Cache"], "HIT")
         self.assertEqual(calls, [url])
 
+    def test_proxy_bodies_cannot_run_as_pages(self):
+        class Fake:
+            status = 200
+            headers = {"Content-Type": "text/html"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def read(self):
+                return b"<script>alert(1)</script>"
+
+        url = "https://navcen.uscg.gov/x.html?t=" + str(time.time())
+        with mock.patch.object(self.app, "_urlopen", lambda req, timeout: Fake()):
+            st, ct, body, headers = self.s.get("/api/proxy?url=" + urllib.request.quote(url, safe=""))
+        self.assertEqual(st, 200)
+        self.assertEqual(headers["Content-Security-Policy"], "sandbox")
+        self.assertEqual(headers["Content-Disposition"], "attachment")
+
+    def test_redirect_off_the_allow_list_is_refused(self):
+        h = self.app._CheckedRedirect()
+        req = urllib.request.Request("https://navcen.uscg.gov/a")
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            h.redirect_request(req, None, 302, "Found", {}, "https://evil.example.com/a")
+        self.assertEqual(cm.exception.code, 502)
+        with self.assertRaises(urllib.error.HTTPError):
+            h.redirect_request(req, None, 302, "Found", {}, "http://navcen.uscg.gov/a")  # downgrade to http
+        ok = h.redirect_request(req, None, 302, "Found", {}, "https://navcen.uscg.gov/b")
+        self.assertEqual(ok.full_url, "https://navcen.uscg.gov/b")
+
+    def test_second_copy_cannot_bind_the_same_port(self):
+        port = self.s.httpd.server_address[1]
+        with self.assertRaises(OSError):
+            self.app.make_server(port)
+
     def test_allow_list_matches_server_js(self):
         js = (REPO / "server.js").read_text(encoding="utf-8")
         block = re.search(r"ALLOWED_HOSTS = new Set\(\[(.*?)\]\)", js, re.S).group(1)
@@ -221,11 +258,39 @@ class ShippedCopyTests(unittest.TestCase):
         (self.target / "app" / "public" / "css" / "styles.css").unlink()
         self.assertFalse(self.app.seal_status()[0])
 
-    def test_hand_edit_after_release_does_not_lock_the_page(self):
+    def test_hand_edit_after_release_does_not_lock_the_page_for_ever(self):
         f = self.target / "app" / "public" / "css" / "styles.css"
         f.write_text(f.read_text(encoding="utf-8") + "\n/* local tweak */\n", encoding="utf-8")
         self.age(f, +120)
-        self.assertEqual(self.app.seal_status(), (True, []))
+        ok, problems = self.app.seal_status()
+        self.assertFalse(ok)  # at first it could be the next release arriving
+        self.assertTrue(any("newer than the release" in p for p in problems), problems)
+        # Watched time accrues only between checks, capped per gap (a sleeping PC doesn't count).
+        clock = [1000.0]
+        with mock.patch.object(self.app.time, "monotonic", lambda: clock[0]):
+            self.app.seal_status()
+            for _ in range(int(self.app.HAND_EDIT_WAIT_S / self.app.WATCH_GAP_CAP_S) - 1):
+                clock[0] += 3600  # an hour between checks still counts as 15 s
+                self.assertFalse(self.app.seal_status()[0])
+            clock[0] += 3600
+            clock[0] += 3600
+            self.app.seal_status()
+            self.assertEqual(self.app.seal_status(), (True, []))
+
+    def test_next_release_files_ahead_of_its_release_json_hold_the_page(self):
+        # The reviewer's case: Dropbox brings the next release's page files
+        # first, while app.py and release.json are still the old release.
+        f = self.target / "app" / "public" / "js" / "app.js"
+        f.write_text("// next release's app.js", encoding="utf-8")
+        self.age(f, +400)
+        ok, problems = self.app.seal_status()
+        self.assertFalse(ok)
+        s = Served(self.app)
+        try:
+            self.assertIn(b"still downloading an update", s.get("/")[2])
+            self.assertTrue(s.get("/api/version")[2].decode().endswith("-updating"))
+        finally:
+            s.close()
 
     def test_new_files_before_new_release_json_do_not_pass_as_hand_edits(self):
         # Negative control for the hand-edit grace: a newer app.py arriving

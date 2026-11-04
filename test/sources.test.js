@@ -56,7 +56,7 @@ test('the stale "until further notice" lines do NOT take PRN 11 and 25 out today
 test('without the outage file, advisory "until further notice" lines are shown, not applied', () => {
   const h = Hh.buildHealth({ oa: Hh.parseNavcenOA(F('navcen-opsadvisory.oa1')) }, NOW);
   assert.equal(h.usable(sat('GPS', 'GPS BIII-5  (PRN 11)'), NOW), true);
-  assert.deepEqual(h.notes.map((n) => n.id), ['PRN 11', 'PRN 25']);
+  assert.deepEqual(h.notes.map((n) => n.id).sort(), ['PRN 03', 'PRN 11', 'PRN 25']); // FCSTEXTD too
   assert.equal(h.known.GPSconfirmed, false);
 });
 
@@ -77,6 +77,40 @@ test('an open outage with no later notice IS applied; a scheduled window applies
   assert.equal(h.usable(sat('GPS', 'GPS BIIRM-6 (PRN 07)'), new Date('2026-11-08T21:00:00Z')), true);
   assert.deepEqual(h.scheduled.map((s) => s.id), ['PRN 07']);
   assert.deepEqual(h.excludedNow.map((s) => s.id), ['PRN 09']);
+});
+
+test('review fixes: FCSTEXTD applies until closed; an unrelated later outage does not cancel a window', () => {
+  const at = new Date('2026-07-10T06:00:00Z');
+  const oa = Hh.parseNavcenOA('A. FORECASTS:\n2026053       100507Z JUL 2026    03   FCSTEXTD     190/1800-/');
+  const emptySof = Hh.parseSof('<CREATION YEAR="2026" DOY="191" HR="00" MIN="00" SEC="00" /><HISTORICAL SVID="5" SVN="50" NAME="NANU" TYPE="FCSTSUMM" REFERENCE="2026001" START_YEAR="2026" START_DOY="010" START_HR="01" START_MIN="00" START_SEC="00" END_YEAR="2026" END_DOY="010" END_HR="02" END_MIN="00" END_SEC="00" />');
+  assert.equal(Hh.buildHealth({ oa, sof: emptySof }, at).usable(sat('GPS', 'GPS BIIF-8  (PRN 03)'), at), false);
+  // Closed once the outage file has the later summary (the real 4 Nov state).
+  const real = Hh.parseSof(F('navcen-sof-2026.xml'));
+  const after = new Date('2026-07-11T00:00:00Z'); // the real outage ran 9 Jul 23:37 to 10 Jul 07:55
+  assert.equal(Hh.buildHealth({ oa, sof: real }, after).usable(sat('GPS', 'GPS BIIF-8  (PRN 03)'), after), true);
+  assert.equal(Hh.buildHealth({ oa, sof: real }, at).usable(sat('GPS', 'GPS BIIF-8  (PRN 03)'), at), false); // inside it
+  // Maintenance next week; meanwhile an unrelated short outage gets a later NANU.
+  const oa2 = Hh.parseNavcenOA('A. FORECASTS:\n2026120       051200Z NOV 2026    07   FCSTMX       312/1400-312/2000');
+  const sof2 = Hh.parseSof('<HISTORICAL SVID="7" SVN="48" NAME="NANU" TYPE="UNUSABLE" REFERENCE="2026121" START_YEAR="2026" START_DOY="309" START_HR="01" START_MIN="00" START_SEC="00" END_YEAR="2026" END_DOY="309" END_HR="03" END_MIN="00" END_SEC="00" />');
+  const h2 = Hh.buildHealth({ oa: oa2, sof: sof2 }, new Date('2026-11-06T00:00:00Z'));
+  assert.equal(h2.usable(sat('GPS', 'GPS BIIRM-6 (PRN 07)'), new Date('2026-11-08T15:00:00Z')), false);
+  assert.deepEqual(h2.scheduled.map((x) => x.id), ['PRN 07']);
+  // ...but its own summary (overlapping, later) does close it.
+  const sof3 = Hh.parseSof('<HISTORICAL SVID="7" SVN="48" NAME="NANU" TYPE="FCSTSUMM" REFERENCE="2026125" START_YEAR="2026" START_DOY="312" START_HR="14" START_MIN="05" START_SEC="00" END_YEAR="2026" END_DOY="312" END_HR="15" END_MIN="00" END_SEC="00" />');
+  const h3 = Hh.buildHealth({ oa: oa2, sof: sof3 }, new Date('2026-11-09T00:00:00Z'));
+  assert.equal(h3.usable(sat('GPS', 'GPS BIIRM-6 (PRN 07)'), new Date('2026-11-08T16:00:00Z')), true);
+  assert.equal(h3.usable(sat('GPS', 'GPS BIIRM-6 (PRN 07)'), new Date('2026-11-08T14:30:00Z')), false);
+});
+
+test('a January notice about a late-December outage lands in the previous year', () => {
+  const oa = Hh.parseNavcenOA('B. ADVISORIES:\n2027002       021200Z JAN 2027    12   UNUSABLE     365/2200-001/0400');
+  assert.equal(oa.notices[0].start.toISOString(), '2026-12-31T22:00:00.000Z');
+  assert.equal(oa.notices[0].stop.toISOString(), '2027-01-01T04:00:00.000Z');
+});
+
+test('a positive Dst jump is not called quiet', () => {
+  assert.match(E.statKid('dst', 35), /blast of solar wind/);
+  assert.match(E.statKid('dst', 5), /quiet/);
 });
 
 test('a December notice about a January outage lands in the next year', () => {

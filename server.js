@@ -39,6 +39,8 @@ const TYPES = {
 };
 
 const cache = new Map(); // url → { t, status, type, body }
+// Proxied bodies are read with fetch(); never let upstream HTML/SVG run as a page here.
+const SANDBOX = { 'content-security-policy': 'sandbox', 'content-disposition': 'attachment', 'x-content-type-options': 'nosniff' };
 const CACHE_MS = 2 * 60 * 1000;
 
 async function proxy(req, res, target) {
@@ -53,15 +55,16 @@ async function proxy(req, res, target) {
   }
   const hit = cache.get(url.href);
   if (hit && Date.now() - hit.t < CACHE_MS) {
-    res.writeHead(hit.status, { 'content-type': hit.type, 'x-cache': 'HIT' });
+    res.writeHead(hit.status, { 'content-type': hit.type, 'x-cache': 'HIT', ...SANDBOX });
     return res.end(hit.body);
   }
   try {
-    const r = await fetch(url, { headers: { 'user-agent': 'gps-conditions-dashboard' }, signal: AbortSignal.timeout(30000) });
+    // redirect: 'error' - never follow a redirect off the allow-list.
+    const r = await fetch(url, { headers: { 'user-agent': 'gps-conditions-dashboard' }, redirect: 'error', signal: AbortSignal.timeout(30000) });
     const body = Buffer.from(await r.arrayBuffer());
     const type = r.headers.get('content-type') || 'application/octet-stream';
     if (r.ok) cache.set(url.href, { t: Date.now(), status: r.status, type, body });
-    res.writeHead(r.status, { 'content-type': type, 'x-cache': 'MISS' });
+    res.writeHead(r.status, { 'content-type': type, 'x-cache': 'MISS', ...SANDBOX });
     res.end(body);
   } catch (e) {
     send(res, 502, `Upstream error: ${e.message}`);

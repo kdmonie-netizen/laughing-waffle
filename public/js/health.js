@@ -10,9 +10,14 @@
 //    "unusable until further notice" months after the outage file had closed
 //    both outages (same day, NANUs 2026049 / 2026069) and NAVCEN's own status
 //    page showed them healthy. So an advisory's open-ended "until further
-//    notice" line excludes a satellite only when the outage file is loaded and
-//    has no later notice for it; without the outage file it is shown, not
-//    applied.
+//    notice" line (UNUSUFN, UNUNOREF, FCSTUUFN, and FCSTEXTD: a scheduled
+//    outage extended with no end) excludes a satellite only when the outage
+//    file is loaded and has no later notice for it; without the outage file it
+//    is shown, not applied. The outage file only holds FINISHED outages, so an
+//    outage still running is known only from the advisory.
+//    A scheduled window (FCSTDV/FCSTMX/FCSTRESCD/UNUSABLE) is closed only by a
+//    later notice that overlaps it (its summary or cancellation), never by an
+//    unrelated later outage of the same satellite.
 //  * Galileo: the European GNSS Service Centre constellation table (HTML).
 //    Any status other than USABLE is excluded.
 //
@@ -26,7 +31,7 @@
 
 const MONTHS = { JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5, JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11 };
 
-export const GPS_OPEN = new Set(['UNUSUFN', 'UNUNOREF', 'FCSTUUFN']);
+export const GPS_OPEN = new Set(['UNUSUFN', 'UNUNOREF', 'FCSTUUFN', 'FCSTEXTD']);
 export const GPS_WINDOW = new Set(['UNUSABLE', 'FCSTDV', 'FCSTMX', 'FCSTRESCD']);
 
 export const NANU_WORDS = {
@@ -80,9 +85,11 @@ export function parseNavcenOA(text) {
     const sent = new Date(Date.UTC(+m[6], mon, +m[2], +m[3], +m[4]));
     const [a, b] = (m[9] || '').split('-');
     let start = jdayTime(+m[6], a);
-    // A start more than half a year before the message belongs to next year
-    // (a December message about a January outage).
+    // A start more than half a year from the message is in the neighbouring
+    // year: a December message about a January outage, or a January message
+    // about a late-December one.
     if (start && start < sent - 182 * 86400000) start = jdayTime(+m[6] + 1, a);
+    else if (start && start > +sent + 182 * 86400000) start = jdayTime(+m[6] - 1, a);
     let stop = start ? jdayTime(start.getUTCFullYear(), b) : null;
     if (stop && start && stop < start) stop = jdayTime(start.getUTCFullYear() + 1, b);
     notices.push({ section, nanu: m[1], sent, prn: m[7] ? +m[7] : null, type: m[8], start, stop, words: NANU_WORDS[m[8]] || m[8].toLowerCase() });
@@ -163,13 +170,18 @@ export function gpsWindows({ oa = null, sof = null } = {}) {
   // A later notice for the same satellite in the outage file (or a later
   // summary / cancellation in the advisory) closes an advisory line.
   const closedBySof = (n) => (sof?.outages || []).some((o) => o.prn === n.prn && o.ref > n.nanu);
+  const overlaps = (o, n) => o.start < n.stop && (!o.end || o.end > n.start);
+  const windowClosedBySof = (n) => (sof?.outages || []).some((o) => o.prn === n.prn && o.ref > n.nanu && overlaps(o, n));
+  const windowClosedByOa = (n) => notices.some((m) => m.prn === n.prn && (m.type === 'FCSTSUMM' || m.type === 'FCSTCANC') && m.nanu > n.nanu && m.start && overlaps({ start: m.start, end: m.stop }, n));
   const closedByOa = (n) => notices.some((m) => m.prn === n.prn && (m.type === 'FCSTSUMM' || m.type === 'FCSTCANC') && m.nanu > n.nanu);
   const inSof = (n) => (sof?.outages || []).some((o) => o.ref === n.nanu);
   for (const n of notices) {
-    if (inSof(n) || closedByOa(n)) continue; // already counted, or finished
-    if (GPS_WINDOW.has(n.type) && n.stop) {
-      if (!closedBySof(n)) windows.push({ prn: n.prn, start: n.start, end: n.stop, why: n.words, source: 'advisory', nanu: n.nanu });
+    if (inSof(n)) continue; // already counted from the outage file
+    if ((GPS_WINDOW.has(n.type) || GPS_OPEN.has(n.type)) && n.stop) {
+      // a window with an end time: closed only by an overlapping later notice
+      if (!windowClosedBySof(n) && !windowClosedByOa(n)) windows.push({ prn: n.prn, start: n.start, end: n.stop, why: n.words, source: 'advisory', nanu: n.nanu });
     } else if (GPS_OPEN.has(n.type)) {
+      if (closedByOa(n)) continue;
       if (sof && !closedBySof(n)) windows.push({ prn: n.prn, start: n.start, end: null, why: n.words, source: 'advisory', nanu: n.nanu });
       else if (!sof) notes.push({ constellation: 'GPS', id: prnLabel(n.prn), why: `${n.words} in NAVCEN's advisory (not applied: the outage file that confirms it didn't load)`, since: n.start, until: null, nanu: n.nanu });
     }

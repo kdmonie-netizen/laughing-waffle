@@ -74,7 +74,11 @@ const LOADERS = {
   navcenOA: (force) => fetchText(SOURCES.navcenOA, { force, ttl: CACHE_TTL.text, persist: true, proxyFirst: true }),
   navcenSof: (force) => fetchText(SOURCES.navcenSof, { force, ttl: 3 * 3600000, proxyFirst: true }),
   galileoStatus: (force) => fetchText(SOURCES.galileoStatus, { force, ttl: 3600000, proxyFirst: true }),
-  cors: (force) => fetchJSON(P.corsQueryUrl(SOURCES.corsLayer, settings.lat, settings.lon), { force, ttl: 24 * 3600000, persist: true }),
+  // The answer carries the site it was asked for, so a late reply for an old site is never shown for a new one.
+  cors: async (force) => {
+    const site = { lat: settings.lat, lon: settings.lon };
+    return { site, data: await fetchJSON(P.corsQueryUrl(SOURCES.corsLayer, site.lat, site.lon), { force, ttl: 24 * 3600000, persist: true }) };
+  },
 };
 
 // GloTEC: the index (~0.5 MB, refreshed every 10 min) names the newest frame;
@@ -83,7 +87,10 @@ let glotecFrame = { url: null, data: null };
 async function loadGlotec(force) {
   const idx = await fetchJSON(SOURCES.glotecIndex, { force, ttl: 10 * 60000 });
   const last = Array.isArray(idx) ? idx[idx.length - 1] : null;
-  if (!last?.url) throw new Error('GloTEC index is empty');
+  if (!last?.url) {
+    if (glotecFrame.data) return glotecFrame.data; // a blip in the index: keep the frame we have
+    throw new Error('GloTEC index is empty');
+  }
   const url = new URL(last.url, SWPC).href;
   if (glotecFrame.url !== url) glotecFrame = { url, data: await fetchJSON(url, { memo: false, ttl: 0 }) };
   return glotecFrame.data;
@@ -149,7 +156,7 @@ function parseAll(raw) {
   p.propagated = safe(P.parsePropagated, raw.propagated) || [];
   p.daypre = safe(P.parseDaypre, raw.daypre);
   p.glotec = raw.glotec || null;
-  p.cors = safe((j) => P.parseCors(j, settings.lat, settings.lon), raw.cors) || [];
+  p.cors = safe(corsForSite, raw.cors) || [];
   // Health lists: a page that parses to nothing has changed shape, which
   // means "unknown", never "every satellite is fine".
   p.oa = safe(parseNavcenOA, raw.navcenOA);
@@ -158,6 +165,16 @@ function parseAll(raw) {
   p.galileo = safe(parseGalileoStatus, raw.galileoStatus);
   if (p.galileo && !p.galileo.length) p.galileo = null;
   return p;
+}
+
+/** Minutes since the newest row in a raw SWPC table, whatever its value. */
+function rowAge(json) {
+  let newest = 0;
+  for (const r of P.toRows(json)) {
+    const t = P.parseTime(r.time_tag);
+    if (t && +t > newest) newest = +t;
+  }
+  return newest ? (Date.now() - newest) / 60000 : null;
 }
 
 // A live reading older than this is "no recent data", never "calm": NOAA's
@@ -193,11 +210,13 @@ function realtime(p) {
     speed: recent(p.plasma, 'speed', 30) ?? last(p.plasma, 'speed')?.speed ?? null,
     density: recent(p.plasma, 'density', 30) ?? last(p.plasma, 'density')?.density ?? null,
     xrayFlux: xr?.flux ?? null,
-    rNow: xr ? P.rScaleFromFlux(xr.flux) : 0,
+    rNow: xr ? P.rScaleFromFlux(xr.flux) : null, // null = no recent reading (grading checks >= 1)
     protonFlux: pr?.flux ?? null,
-    sNow: pr ? P.sScaleFromFlux(pr.flux) : 0,
+    sNow: pr ? P.sScaleFromFlux(pr.flux) : null,
     aurora: p.ovation ? p.ovation.at(settings.lat, settings.lon) : null,
     ages: { wind: age(p.plasma, 'speed'), mag: age(p.mag, 'bz'), xray: age(p.xray, 'flux'), protons: age(p.protons, 'flux'), kp: age(p.kp1m, 'kp') },
+    // Newest row of ANY value (incl. GOES's flagged zero readings), to tell "feed silent" from "readings unusable".
+    rowAges: { xray: rowAge(state.raw.xray), protons: rowAge(state.raw.protons) },
   };
 }
 
@@ -259,15 +278,22 @@ function renderErrors() {
     msgs.push(`Couldn’t reach some NOAA feeds (${failed.join(', ')}). The grade is built from whatever did load.${fileHint}`);
   }
   const a = state.rt?.ages || {};
-  const stale = [
-    ['solar wind speed', a.wind],
-    ['magnetic field (Bz)', a.mag],
-    ['X-ray flares', a.xray],
-    ['protons', a.protons],
+  const ra = state.rt?.rowAges || {};
+  const fmtAge = (m) => (m < 120 ? `${Math.round(m)} min` : `${(m / 60).toFixed(1)} h`);
+  const old = [
+    ['solar wind speed', a.wind, null],
+    ['magnetic field (Bz)', a.mag, null],
+    ['X-ray readings', a.xray, ra.xray],
+    ['proton readings', a.protons, ra.protons],
   ].filter(([, m]) => m != null && m > FRESH_MIN);
-  if (stale.length) {
-    const fmtAge = (m) => (m < 120 ? `${Math.round(m)} min` : `${(m / 60).toFixed(1)} h`);
-    msgs.push(`No recent ${stale.map(([n, m]) => `${n} (last reading ${fmtAge(m)} ago)`).join(', ')}. NOAA’s live feed has gone quiet, so these are left out of the grade until it comes back. That is “unknown”, not “calm”.`);
+  // Rows still arriving but none usable (GOES reports zero, e.g. electron contamination) vs. a silent feed.
+  const flagged = old.filter(([, , r]) => r != null && r <= FRESH_MIN);
+  const silent = old.filter(([, , r]) => !(r != null && r <= FRESH_MIN));
+  if (silent.length) {
+    msgs.push(`No recent ${silent.map(([n, m]) => `${n} (last reading ${fmtAge(m)} ago)`).join(', ')}. NOAA’s live feed has gone quiet, so these are left out of the grade until it comes back. That is “unknown”, not “calm”.`);
+  }
+  if (flagged.length) {
+    msgs.push(`NOAA is still sending ${flagged.map(([n]) => n).join(' and ')}, but the ones from the last ${fmtAge(Math.min(...flagged.map(([, m]) => m)))} are marked unusable (the GOES sensor reports zero). They are left out of the grade until good readings return. That is “unknown”, not “calm”.`);
   }
   const box = $('errors');
   box.hidden = !msgs.length;
@@ -319,18 +345,18 @@ function renderToday() {
     mlat: L.statKid('mlat', r.mlat),
   };
   const ex = extraNow();
-  kid.tec = L.statKid('tec', ex.tec);
+  kid.tec = L.statKid('tec', ex.tec?.modelOnly ? { anomaly: null } : ex.tec);
   kid.dst = L.statKid('dst', ex.dst?.dst ?? null);
   kid.kpNext = L.statKid('kpNext', ex.kpNext);
   const stats = [
     { k: 'Kp now (est.)', v: rt.kpNow?.toFixed(2) ?? '–', d: rt.kpNow != null ? `G${P.gScaleFromKp(rt.kpNow)} storm scale` : 'no data', c: kpC, kid: kid.kp },
     { k: 'IMF Bz (30 min)', v: rt.bz30 != null ? `${rt.bz30.toFixed(1)} nT` : '–', d: rt.bz30 == null ? '' : rt.bz30 < -10 ? 'strongly south' : rt.bz30 < -3 ? 'south: loading' : 'north/neutral', c: rt.bz30 == null ? null : rt.bz30 < -10 ? css('--bad') : rt.bz30 < -3 ? css('--fair') : css('--good'), kid: kid.bz },
     { k: 'Solar wind', v: rt.speed != null ? `${Math.round(rt.speed)} km/s` : '–', d: rt.density != null ? `${rt.density.toFixed(1)} p/cm³` : '', c: rt.speed == null ? null : rt.speed > 700 ? css('--bad') : rt.speed > 500 ? css('--fair') : css('--good'), kid: kid.speed },
-    { k: 'X-ray', v: P.flareClass(rt.xrayFlux), d: rt.rNow ? `R${rt.rNow} radio blackout` : 'no blackout', c: rt.rNow >= 3 ? css('--bad') : rt.rNow ? css('--fair') : css('--good'), kid: kid.xray },
-    { k: 'Protons ≥10 MeV', v: rt.protonFlux != null ? `${rt.protonFlux < 10 ? rt.protonFlux.toFixed(2) : Math.round(rt.protonFlux)} pfu` : '–', d: rt.sNow ? `S${rt.sNow} radiation storm` : 'below S1', c: rt.sNow ? css('--poor') : css('--good'), kid: kid.protons },
+    { k: 'X-ray', v: rt.xrayFlux != null ? P.flareClass(rt.xrayFlux) : '–', d: rt.rNow == null ? 'no recent data' : rt.rNow ? `R${rt.rNow} radio blackout` : 'no blackout', c: rt.rNow == null ? null : rt.rNow >= 3 ? css('--bad') : rt.rNow ? css('--fair') : css('--good'), kid: kid.xray },
+    { k: 'Protons ≥10 MeV', v: rt.protonFlux != null ? `${rt.protonFlux < 10 ? rt.protonFlux.toFixed(2) : Math.round(rt.protonFlux)} pfu` : '–', d: rt.sNow == null ? 'no recent data' : rt.sNow ? `S${rt.sNow} radiation storm` : 'below S1', c: rt.sNow == null ? null : rt.sNow ? css('--poor') : css('--good'), kid: kid.protons },
     { k: 'Aurora overhead', v: rt.aurora != null ? `${Math.round(rt.aurora)}%` : '–', d: 'OVATION at your site', c: rt.aurora == null ? null : rt.aurora >= 30 ? css('--bad') : rt.aurora >= 10 ? css('--fair') : css('--good'), kid: kid.aurora },
-    { k: 'Ionosphere (TEC)', v: ex.tec?.tec != null ? `${ex.tec.tec.toFixed(1)} TECU` : '–', d: ex.tec ? `${ex.tec.anomaly != null ? `${ex.tec.anomaly >= 0 ? '+' : ''}${ex.tec.anomaly.toFixed(1)} vs normal · ` : ''}GloTEC ${fmtTime(ex.tec.time)}` : 'no data', c: ex.tec?.anomaly == null ? null : ex.tec.anomaly > 10 ? css('--bad') : ex.tec.anomaly > 3 ? css('--fair') : css('--good'), kid: kid.tec },
-    { k: 'Dst (storm depth)', v: ex.dst ? `${Math.round(ex.dst.dst)} nT` : '–', d: ex.dst ? `Kyoto, ${fmtTime(ex.dst.time)}` : 'no data', c: ex.dst == null ? null : ex.dst.dst <= -100 ? css('--bad') : ex.dst.dst <= -50 ? css('--poor') : ex.dst.dst <= -30 ? css('--fair') : css('--good'), kid: kid.dst },
+    { k: 'Ionosphere (TEC)', v: ex.tec?.tec != null ? `${ex.tec.tec.toFixed(1)} TECU` : '–', d: ex.tec ? (ex.tec.modelOnly ? `model estimate only (no GPS data nearby) · ${fmtTime(ex.tec.time)}` : `${ex.tec.anomaly != null ? `${ex.tec.anomaly >= 0 ? '+' : ''}${ex.tec.anomaly.toFixed(1)} vs normal · ` : ''}GloTEC ${fmtTime(ex.tec.time)}`) : 'no data', c: ex.tec?.anomaly == null || ex.tec.modelOnly ? null : ex.tec.anomaly > 10 ? css('--bad') : ex.tec.anomaly > 3 ? css('--fair') : css('--good'), kid: kid.tec },
+    { k: 'Dst (storm depth)', v: ex.dst ? `${Math.round(ex.dst.dst)} nT` : '–', d: ex.dst ? `Kyoto, ${fmtTime(ex.dst.time)}` : 'no data', c: ex.dst == null ? null : ex.dst.dst <= -100 ? css('--bad') : ex.dst.dst <= -50 ? css('--poor') : ex.dst.dst <= -30 || ex.dst.dst > 20 ? css('--fair') : css('--good'), kid: kid.dst },
     { k: 'Kp next hour (model)', v: ex.kpNext != null ? ex.kpNext.toFixed(1) : '–', d: ex.kpNext != null ? `NOAA Geospace, to ${fmtTime(ex.kpNextUntil)}` : 'no data', c: ex.kpNext == null ? null : kpColor(ex.kpNext), kid: kid.kpNext },
     { k: 'Satellites / PDOP', v: geoNow ? `${geoNow.count} / ${Number.isFinite(geoNow.pdop) ? geoNow.pdop.toFixed(1) : '∞'}` : '–', d: geoNow ? `above ${settings.elevationMask}° mask` : 'element sets loading', c: geoNow ? (geoNow.pdop > 4 ? css('--fair') : css('--good')) : null, kid: kid.sats },
     { k: 'Magnetic latitude', v: `${r.mlat.toFixed(1)}°`, d: latitudeBand(r.mlat), c: null, kid: kid.mlat },
@@ -359,7 +385,8 @@ function extraNow() {
   const dst = dstRow && now - dstRow.time < 3 * 3600000 ? dstRow : null;
   const ahead = p.kpModel.filter((r) => r.time >= now);
   return {
-    tec: tec && now - tec.time < 2 * 3600000 ? tec : null,
+    // quality_flag 0 = no GNSS data near this cell, so the value is the model's background estimate.
+    tec: tec && now - tec.time < 2 * 3600000 ? { ...tec, modelOnly: tec.quality === 0 } : null,
     dst,
     kpNext: ahead.length ? Math.max(...ahead.map((r) => r.kp)) : null,
     kpNextUntil: ahead.length ? ahead[ahead.length - 1].time : null,
@@ -794,7 +821,7 @@ async function renderSims() {
     if (state.players[el]?.src === src && Date.now() - state.players[el].t < 30 * 60000) continue;
     fetchJSON(SOURCES[src], { ttl: 15 * 60000 })
       .then((json) => {
-        state.players[el]?.player?.pause?.();
+        state.players[el]?.player?.destroy?.();
         const root = $(el);
         const player = new FramePlayer(root, P.parseFrames(json), { maxFrames: src === 'enlilFrames' || src === 'wamIpeFrames' ? 200 : 96 });
         state.players[el] = { src, player, t: Date.now() };
@@ -876,7 +903,18 @@ function renderMidLat() {
     box.innerHTML = '';
     return;
   }
-  const day = (i) => (i === 0 ? 'Tomorrow' : d.dates[i].toLocaleDateString(undefined, { weekday: 'short', timeZone: 'UTC' }));
+  // NOAA's columns are UTC days (00-24 UT is 7 PM-7 PM Eastern, 6 PM-6 PM Central). Name each
+  // column from its own date against the local calendar, never by position.
+  const localKey = (dt) => `${dt.getFullYear()}-${dt.getMonth()}-${dt.getDate()}`;
+  const utcKey = (dt) => `${dt.getUTCFullYear()}-${dt.getUTCMonth()}-${dt.getUTCDate()}`;
+  const today = new Date();
+  const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1);
+  const day = (i) => {
+    const k = utcKey(d.dates[i]);
+    if (k === localKey(today)) return 'Today';
+    if (k === localKey(tomorrow)) return 'Tomorrow';
+    return d.dates[i].toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  };
   const cell = (v) => `<td>${v ?? '–'}%</td>`;
   box.innerHTML = `<h3>Lower 48 (mid-latitude) odds</h3>
     <table><thead><tr><th></th>${d.dates.map((_, i) => `<th>${day(i)}</th>`).join('')}</tr></thead><tbody>
@@ -885,7 +923,7 @@ function renderMidLat() {
     <tr><td>Major or severe storm</td>${(d.probMid.major || []).map(cell).join('')}</tr>
     ${d.midKMax ? `<tr><td>Highest mid-latitude K</td>${d.midKMax.map((k) => `<td>${k}</td>`).join('')}</tr>` : ''}
     </tbody></table>
-    <p class="muted small">NOAA’s 3-day predictions${d.issued ? `, issued ${fmtDay(d.issued)} ${fmtTime(d.issued)}` : ''}. Shown for reference; the grade uses the planetary Kp forecast scaled to your magnetic latitude.</p>`;
+    <p class="muted small">NOAA’s 3-day predictions${d.issued ? `, issued ${fmtDay(d.issued)} ${fmtTime(d.issued)}` : ''}. Each column is a UTC day. Shown for reference; the grade uses the planetary Kp forecast scaled to your magnetic latitude.</p>`;
 }
 
 /** Nearest NOAA CORS stations + the FAA WAAS map. */
@@ -905,16 +943,26 @@ function renderField() {
   showImage($('waasImg'), `${SOURCES.waasImage}?t=${Math.floor(Date.now() / 180000)}`, 'The FAA WAAS map is unavailable right now (their site posts occasional outages).');
 }
 
+/** CORS stations for the CURRENT site only ([] if the answer was for another site). */
+function corsForSite(raw) {
+  if (!raw?.data || raw.site?.lat !== settings.lat || raw.site?.lon !== settings.lon) return [];
+  return P.parseCors(raw.data, settings.lat, settings.lon);
+}
+
 /** The CORS list depends on the site, so a new location fetches it again. */
 async function refreshCors() {
+  const asked = { lat: settings.lat, lon: settings.lon };
+  let raw = null;
+  let err;
   try {
-    state.raw.cors = await LOADERS.cors(false);
-    state.errors.cors = undefined;
+    raw = await LOADERS.cors(false);
   } catch (e) {
-    state.raw.cors = null;
-    state.errors.cors = String(e.message || e);
+    err = String(e.message || e);
   }
-  state.parsed.cors = state.raw.cors ? P.parseCors(state.raw.cors, settings.lat, settings.lon) : [];
+  if (asked.lat !== settings.lat || asked.lon !== settings.lon) return; // the site changed again meanwhile
+  state.raw.cors = raw;
+  state.errors.cors = err;
+  state.parsed.cors = corsForSite(raw);
   renderField();
   renderFeeds();
 }
