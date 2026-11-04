@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GPS Conditions</title>
+  <meta name="description" content="One-stop GPS/GNSS conditions: today's go/no-go grade, Kp, solar wind, flares, satellite geometry, 45-day outlook and space-weather simulations." />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%2322c55e'/><path d='M8 16a8 8 0 0 1 16 0' stroke='white' stroke-width='3' fill='none'/><circle cx='16' cy='18' r='3' fill='white'/></svg>" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <div>
+        <h1>GPS Conditions</h1>
+        <p class="sub">Space weather + satellite geometry → is today a good GPS day?</p>
+      </div>
+    </div>
+    <div class="controls">
+      <button id="locBtn" class="chip" title="Change location"><span aria-hidden="true">📍</span> <span id="locLabel">Location</span></button>
+      <label class="chip select">
+        <span class="sr">Work profile</span>
+        <select id="profileSel"></select>
+      </label>
+      <button id="refreshBtn" class="chip" title="Refresh all data">↻ Refresh</button>
+      <span id="updated" class="muted small"></span>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Sections">
+    <a href="#today">Today</a>
+    <a href="#timeline">72-hour</a>
+    <a href="#outlook">45-day outlook</a>
+    <a href="#live">Live data</a>
+    <a href="#sats">Satellites</a>
+    <a href="#sims">Simulations</a>
+    <a href="#alerts">Alerts</a>
+    <a href="#sources">Sources</a>
+    <a href="#method">How it’s graded</a>
+  </nav>
+
+  <main>
+    <div id="errors" class="errors" hidden></div>
+
+    <!-- ===== TODAY ===== -->
+    <section id="today" class="hero">
+      <div class="grade-card" id="gradeCard">
+        <div class="grade-label">Today’s GPS grade</div>
+        <div class="grade" id="todayGrade">…</div>
+        <div class="verdict" id="todayVerdict">Loading conditions…</div>
+        <div class="score muted" id="todayScore"></div>
+        <div class="window" id="todayWindow"></div>
+      </div>
+      <div class="now-card">
+        <div class="now-head">
+          <h2>Right now</h2>
+          <span class="pill" id="nowGrade"></span>
+        </div>
+        <div class="stats" id="nowStats"></div>
+        <h3>What’s driving the grade</h3>
+        <ul class="drivers" id="todayDrivers"></ul>
+      </div>
+    </section>
+
+    <!-- ===== 72 h TIMELINE ===== -->
+    <section id="timeline" class="card">
+      <div class="card-head">
+        <h2>Hour-by-hour, next 72 hours</h2>
+        <span class="muted small">Your local time. Shaded = outside work hours. Tap an hour for details.</span>
+      </div>
+      <div class="hours" id="hourStrip"></div>
+      <div class="hour-detail" id="hourDetail"></div>
+    </section>
+
+    <!-- ===== OUTLOOK ===== -->
+    <section id="outlook" class="card">
+      <div class="card-head">
+        <h2>Outlook: as far out as NOAA forecasts</h2>
+        <span class="muted small">Days 1–3: NOAA 3-day Kp + flare/proton odds (high confidence) · to day 27: 27-day outlook (medium) · to day 45: 45-day Ap (low)</span>
+      </div>
+      <div class="days" id="dayCards"></div>
+      <div class="outlook-strip" id="extStrip"></div>
+    </section>
+
+    <!-- ===== LIVE DATA ===== -->
+    <section id="live" class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>Planetary Kp index</h2><span class="muted small" id="kpNote"></span></div>
+        <canvas class="chart" id="kpChart"></canvas>
+        <div class="legend"><span class="sw good"></span>0–3 quiet <span class="sw fair"></span>4 active <span class="sw poor"></span>5–6 storm (G1–G2) <span class="sw bad"></span>7+ severe · faded = forecast</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Interplanetary magnetic field (Bz / Bt)</h2><span class="muted small">DSCOVR at L1, ~30–60 min upstream</span></div>
+        <canvas class="chart" id="magChart"></canvas>
+        <div class="legend"><span class="sw" style="background:var(--bad)"></span>Bz (southward = negative = bad) <span class="sw" style="background:var(--muted)"></span>Bt total</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Solar wind speed &amp; density</h2></div>
+        <canvas class="chart" id="windChart"></canvas>
+        <div class="legend"><span class="sw" style="background:var(--accent)"></span>Speed km/s <span class="sw" style="background:var(--fair)"></span>Density p/cm³ (×50 for scale)</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Solar X-ray flares (GOES)</h2><span class="muted small">Radio bursts can cost lock on the sunlit side</span></div>
+        <canvas class="chart" id="xrayChart"></canvas>
+        <div class="legend">M = R1–R2 radio blackout · X = R3+ (can disrupt GPS)</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Solar protons ≥10 MeV (GOES)</h2></div>
+        <canvas class="chart" id="protonChart"></canvas>
+        <div class="legend">≥10 pfu = S1 radiation storm (mainly affects polar regions)</div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>NOAA scales: today &amp; next 2 days</h2></div>
+        <div id="scalesTable"></div>
+      </div>
+    </section>
+
+    <!-- ===== SATELLITES ===== -->
+    <section id="sats" class="card">
+      <div class="card-head">
+        <h2>Satellite geometry at your location</h2>
+        <span class="muted small" id="satNote">SGP4 from CelesTrak element sets</span>
+      </div>
+      <div class="sat-controls">
+        <span>Constellations:</span>
+        <span id="constToggles"></span>
+        <label>Elevation mask <input type="number" id="maskInput" min="0" max="40" step="5" /> °</label>
+      </div>
+      <div class="sat-grid">
+        <div>
+          <canvas id="skyplot" class="skyplot" aria-label="Sky plot of visible satellites"></canvas>
+          <div class="legend" id="skyLegend"></div>
+        </div>
+        <div>
+          <canvas class="chart tall" id="dopChart"></canvas>
+          <div class="legend"><span class="sw" style="background:var(--accent)"></span>PDOP (lower is better; &gt;4 hurts RTK) <span class="sw" style="background:var(--good)"></span>Satellites in view ÷ 5</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== SIMULATIONS ===== -->
+    <section id="sims">
+      <h2 class="section-title">Simulations &amp; models</h2>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Solar wind → magnetosphere (live)</h2>
+          <span class="muted small">Shue (1998) magnetopause driven by L1 data · move the sliders to try a storm</span>
+        </div>
+        <div class="sim-grid">
+          <canvas id="magSim" class="sim-canvas"></canvas>
+          <div class="sim-side">
+            <div class="seg" role="group" aria-label="Simulation input">
+              <button data-mode="live" class="on">Live</button>
+              <button data-mode="replay">Replay 24 h</button>
+              <button data-mode="manual">Manual</button>
+            </div>
+            <label>Speed <output id="spdOut"></output><input type="range" id="spdIn" min="250" max="1500" step="10" /></label>
+            <label>Density <output id="denOut"></output><input type="range" id="denIn" min="0.5" max="60" step="0.5" /></label>
+            <label>Bz <output id="bzOut"></output><input type="range" id="bzIn" min="-50" max="30" step="0.5" /></label>
+            <div class="readout" id="magReadout"></div>
+            <div class="muted small" id="replayTime"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="grid2">
+        <div class="card player" id="enlilPlayer">
+          <div class="card-head"><h2>WSA-Enlil solar wind model</h2><span class="muted small">NOAA run: wind speed &amp; density out to Earth, including forecast days</span></div>
+          <div class="player-frame"><img class="player-img" alt="WSA-Enlil solar wind model frame" /></div>
+          <div class="player-bar">
+            <button class="player-play" aria-label="Play">▶</button>
+            <input type="range" class="player-range" min="0" max="0" value="0" aria-label="Frame" />
+            <select class="player-speed" aria-label="Speed"><option value="4">0.5×</option><option value="8" selected>1×</option><option value="16">2×</option></select>
+          </div>
+          <div class="player-time muted small"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>Aurora oval (OVATION nowcast)</h2><span class="muted small" id="auroraNote"></span></div>
+          <canvas id="auroraMap" class="aurora-canvas"></canvas>
+          <div class="legend">Under the oval = scintillation risk. Green → red = rising aurora probability.</div>
+        </div>
+
+        <div class="card player" id="ovationPlayer">
+          <div class="card-head"><h2>OVATION 24 h animation</h2><span class="muted small">Your hemisphere</span></div>
+          <div class="player-frame"><img class="player-img" alt="OVATION aurora animation frame" /></div>
+          <div class="player-bar">
+            <button class="player-play" aria-label="Play">▶</button>
+            <input type="range" class="player-range" min="0" max="0" value="0" aria-label="Frame" />
+            <select class="player-speed" aria-label="Speed"><option value="4">0.5×</option><option value="8" selected>1×</option><option value="16">2×</option></select>
+          </div>
+          <div class="player-time muted small"></div>
+        </div>
+
+        <div class="card player" id="lascoPlayer">
+          <div class="card-head"><h2>LASCO C3 coronagraph (CMEs)</h2><span class="muted small">Watch for halo CMEs heading our way</span></div>
+          <div class="player-frame"><img class="player-img" alt="LASCO C3 coronagraph frame" /></div>
+          <div class="player-bar">
+            <button class="player-play" aria-label="Play">▶</button>
+            <input type="range" class="player-range" min="0" max="0" value="0" aria-label="Frame" />
+            <select class="player-speed" aria-label="Speed"><option value="4">0.5×</option><option value="8" selected>1×</option><option value="16">2×</option></select>
+          </div>
+          <div class="player-time muted small"></div>
+        </div>
+
+        <div class="card player" id="suviPlayer">
+          <div class="card-head"><h2>Sun: GOES SUVI 304 Å</h2><span class="muted small">Active regions &amp; eruptions</span></div>
+          <div class="player-frame"><img class="player-img" alt="GOES SUVI 304 angstrom solar image" /></div>
+          <div class="player-bar">
+            <button class="player-play" aria-label="Play">▶</button>
+            <input type="range" class="player-range" min="0" max="0" value="0" aria-label="Frame" />
+            <select class="player-speed" aria-label="Speed"><option value="4">0.5×</option><option value="8" selected>1×</option><option value="16">2×</option></select>
+          </div>
+          <div class="player-time muted small"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>D-RAP: HF radio absorption</h2><span class="muted small">Shows where flares/protons are hitting the ionosphere</span></div>
+          <div class="player-frame"><img id="drapImg" alt="NOAA D-RAP global absorption map" /></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>CME arrival</h2>
+          <span class="muted small">NASA DONKI WSA-Enlil runs + Drag-Based Model calculator</span>
+        </div>
+        <div class="sim-grid cme">
+          <div>
+            <h3>Modelled Earth arrivals (NASA CCMC)</h3>
+            <div id="cmeArrivals" class="list"></div>
+            <h3>Recent CMEs: pick one to simulate</h3>
+            <div id="cmeList" class="list scroll"></div>
+          </div>
+          <div>
+            <canvas id="cmeCanvas" class="sim-canvas short"></canvas>
+            <div class="dbm-form">
+              <label>Launch (UTC, at 21.5 R☉) <input type="datetime-local" id="dbmTime" /></label>
+              <label>CME speed km/s <input type="number" id="dbmV0" value="1000" min="200" max="3500" /></label>
+              <label>Ambient wind km/s <input type="number" id="dbmW" value="400" min="250" max="900" /></label>
+              <label>Drag γ (×10⁻⁷ km⁻¹) <input type="number" id="dbmGamma" value="0.2" min="0.05" max="2" step="0.05" /></label>
+              <button id="dbmRun" class="chip">Simulate</button>
+            </div>
+            <div class="readout" id="dbmOut"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== ALERTS ===== -->
+    <section id="alerts" class="grid2">
+      <div class="card">
+        <div class="card-head"><h2>SWPC alerts, watches &amp; warnings</h2><span class="muted small">Last 48 h</span></div>
+        <div id="alertList" class="list scroll"></div>
+      </div>
+      <div class="card">
+        <div class="card-head"><h2>Forecaster discussion</h2></div>
+        <details open><summary>3-day forecast (NOAA)</summary><pre id="forecastText" class="pre"></pre></details>
+        <details><summary>Forecast discussion</summary><pre id="discussionText" class="pre"></pre></details>
+      </div>
+    </section>
+
+    <!-- ===== SOURCES ===== -->
+    <section id="sources" class="card">
+      <div class="card-head"><h2>Cross-check sources</h2><span class="muted small">Sites without an open data feed, plus deeper NOAA models</span></div>
+      <div class="links" id="crossLinks"></div>
+      <h3>Feed status</h3>
+      <div id="feedStatus" class="feeds"></div>
+    </section>
+
+    <!-- ===== METHOD ===== -->
+    <section id="method" class="card">
+      <h2>How the grade works</h2>
+      <p>Every hour starts at 100. Points come off for each thing known to degrade GNSS positioning. Penalties scale with your <b>geomagnetic latitude</b> (<span id="mlatNote"></span>) and your <b>work profile</b>. The day grade blends the average and the worst hour inside your work hours (60/40), so one bad afternoon still shows.</p>
+      <table class="method">
+        <thead><tr><th>Factor</th><th>Why it matters for GPS</th><th>Penalty (before scaling)</th></tr></thead>
+        <tbody>
+          <tr><td>Kp</td><td>Storms create steep ionospheric (TEC) gradients and scintillation. RTK ambiguities fail to fix or drop.</td><td>Kp 3: −4 · 4: −12 · 5: −30 · 6: −50 · 7: −70 · 8: −85</td></tr>
+          <tr><td>Flare odds (R scale)</td><td>Big flares bring solar radio bursts and sudden TEC jumps. Sunlit side only.</td><td>up to −35 × P(R3+) − 8 × P(R1–R2)</td></tr>
+          <tr><td>Proton odds (S scale)</td><td>Polar-cap absorption and degraded tracking at high latitude.</td><td>up to −10 × P(S1+), ×0.2 below 60° magnetic</td></tr>
+          <tr><td>Equatorial scintillation</td><td>Plasma bubbles after local sunset within ±25° of the magnetic equator.</td><td>−8 (−12 when F10.7 ≥ 150)</td></tr>
+          <tr><td>Real-time Bz, speed</td><td>Strong southward IMF means a storm is loading now (current hour only).</td><td>Bz −10: −10 · −20: −20; speed 600: −5 · 800: −10</td></tr>
+          <tr><td>Aurora overhead</td><td>The OVATION oval at your site means phase scintillation.</td><td>10%: −10 · 30%: −25 · 60%: −35</td></tr>
+          <tr><td>PDOP / sats</td><td>Weak geometry multiplies every other error.</td><td>PDOP 3: −3 · 4: −8 · 6: −20 · 10: −40; under 5 sats: −50</td></tr>
+        </tbody>
+      </table>
+      <p class="muted small">Grades: A ≥ 90 · B ≥ 80 · C ≥ 70 · D ≥ 55 · F below. Beyond day 3 only Kp/Ap, solar flux and NASA-modelled CME arrivals are known, so those days carry lower confidence. This is a planning aid, not a guarantee: always check your own receiver’s fix quality and residuals. Thresholds live in <code>public/js/grading.js</code>.</p>
+    </section>
+  </main>
+
+  <dialog id="locDialog">
+    <form method="dialog" class="loc-form">
+      <h2>Your work location</h2>
+      <button type="button" id="geoBtn" class="chip">Use my current location</button>
+      <label>Name <input id="locName" placeholder="Job site" /></label>
+      <div class="row">
+        <label>Latitude <input id="locLat" type="number" step="0.0001" min="-90" max="90" required /></label>
+        <label>Longitude <input id="locLon" type="number" step="0.0001" min="-180" max="180" required /></label>
+      </div>
+      <div class="row">
+        <label>Work hours from <input id="workStart" type="number" min="0" max="23" /></label>
+        <label>to <input id="workEnd" type="number" min="1" max="24" /></label>
+      </div>
+      <menu>
+        <button value="cancel" class="chip">Cancel</button>
+        <button value="ok" id="locSave" class="chip primary">Save</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <footer class="muted small">
+    Data: NOAA SWPC, NASA CCMC DONKI, CelesTrak. Not affiliated with any of them. Refreshes every 5 minutes while open.
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
