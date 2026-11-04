@@ -1,5 +1,6 @@
 // Browser smoke test with SYNTHETIC data (no live NOAA access needed).
 // Usage: PORT=8099 node server.js &   then   node test/e2e/smoke.mjs storm|quiet
+// PW_CHANNEL=chrome uses the installed Google Chrome instead of Playwright's own Chromium.
 // Screenshots are written to the current directory (shot-*.png).
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
@@ -52,7 +53,7 @@ const texts = {
 const donkiEnlil = [{ simulationID: 'TEST-ENLIL', estimatedShockArrivalTime: new Date(+now + 5 * 86400000).toISOString(), isEarthGB: false, kp_18: 5, kp_90: 6, kp_135: 7, kp_180: 7, cmeInputs: [{ cmeStartTime: new Date(+now - 86400000).toISOString(), speed: 1100, halfAngle: 40 }], link: 'https://example.invalid' }];
 const donkiCme = [{ time21_5: new Date(+now - 86400000).toISOString(), speed: 1100, halfAngle: 40, latitude: 5, longitude: -10, type: 'O', isMostAccurate: true }];
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.PW_CHANNEL ? { channel: process.env.PW_CHANNEL } : {});
 const page = await browser.newPage({ viewport: { width: 1360, height: 900 }, deviceScaleFactor: 1 });
 const errors = [];
 page.on('console', (m) => { if (m.type() === 'error' || m.type() === 'warning') errors.push(`${m.type()}: ${m.text()}`); });
@@ -85,10 +86,113 @@ await page.locator('#timeline').screenshot({ path: `shot-${scenario}-timeline.pn
 await page.locator('#cmeCanvas').scrollIntoViewIfNeeded();
 await page.waitForTimeout(3000);
 await page.locator('#cmeCanvas').screenshot({ path: `shot-${scenario}-cme.png` });
+
+// ---------------------------------------------------------------- Learn mode
+const fails = [];
+const check = (ok, what) => { console.log(`${ok ? 'PASS' : 'FAIL'}  ${what}`); if (!ok) fails.push(what); };
+const learnState = () => page.evaluate(() => {
+  const vis = [...document.querySelectorAll('.learn')].filter((el) => el.offsetParent !== null);
+  return {
+    on: document.body.classList.contains('learn-on'),
+    pressed: document.getElementById('learnBtn').getAttribute('aria-pressed'),
+    stored: localStorage.getItem('gpsdash:learn'),
+    visible: vis.length,
+    emptyTopics: [...document.querySelectorAll('.learn[data-topic]')].filter((el) => !el.textContent.trim()).map((el) => el.dataset.topic),
+    today: document.getElementById('todayLearn').textContent.trim().slice(0, 60),
+    statLines: document.querySelectorAll('#nowStats .learn').length,
+    dayLines: document.querySelectorAll('#dayCards .learn').length,
+    hourLine: document.querySelector('#hourDetail .learn')?.textContent.trim().slice(0, 60) || '',
+    story: document.querySelectorAll('#storySteps li').length,
+    gloss: document.querySelectorAll('#glossGrid .gloss-card').length,
+    quiz: document.querySelectorAll('#quiz .quiz-q').length,
+    diagramW: document.querySelector('.diagram svg').getBoundingClientRect().width,
+  };
+});
+let L1 = await learnState();
+console.log('learn (default):', JSON.stringify(L1));
+check(L1.on && L1.pressed === 'true' && L1.stored === null, 'Learn mode is on by default (nothing stored yet)');
+check(L1.visible >= 30, `explanation boxes visible (${L1.visible})`);
+check(!L1.emptyTopics.length, `every section box has text (${L1.emptyTopics.join(',') || 'none empty'})`);
+check(/^Today gets an? [A-F]\./.test(L1.today), `today box: "${L1.today}"`);
+check(L1.statLines === 8 && L1.dayLines >= 3 && L1.hourLine.length > 10, `tile/day/hour lines (${L1.statLines}/${L1.dayLines}, "${L1.hourLine}")`);
+check(L1.story === 5 && L1.gloss === 19 && L1.quiz === 6, `Space Weather 101: ${L1.story} steps, ${L1.gloss} words, ${L1.quiz} questions`);
+await page.evaluate(() => scrollTo(0, 0));
+await page.screenshot({ path: `shot-${scenario}-learn-on-full.png`, fullPage: true });
+await page.locator('#learn').screenshot({ path: `shot-${scenario}-learn-section.png` });
+
+// Glossary pop-up from a word inside today's explanation (or the Kp chart box).
+const termBtn = page.locator('#todayLearn .term, .learn[data-topic="kpChart"] .term').first();
+const termKey = await termBtn.getAttribute('data-term');
+await termBtn.click();
+await page.waitForTimeout(200);
+let dlg = await page.evaluate(() => ({ open: document.getElementById('termDialog').open, word: document.getElementById('termWord').textContent, text: document.getElementById('termText').textContent.length }));
+check(dlg.open && dlg.word && dlg.text > 40, `glossary pop-up for "${termKey}" opens: ${dlg.word}`);
+await page.screenshot({ path: `shot-${scenario}-glossary.png` });
+await page.locator('#termDialog button[value="ok"]').click();
+check(!(await page.evaluate(() => document.getElementById('termDialog').open)), 'Got it closes the pop-up');
+await termBtn.click();
+await page.locator('#termAll').click();
+await page.waitForTimeout(1200);
+dlg = await page.evaluate((k) => {
+  const el = document.getElementById(`gloss-${k}`);
+  const r = el.getBoundingClientRect();
+  return { open: document.getElementById('termDialog').open, flash: el.classList.contains('flash'), inView: r.top >= 0 && r.bottom <= innerHeight };
+}, termKey);
+check(!dlg.open && dlg.flash && dlg.inView, 'See all words jumps to that word in the list');
+
+// Quiz: one right answer, one wrong answer, then finish and reset.
+await page.locator('.quiz-q[data-i="0"] .quiz-choice[data-j="1"]').click(); // right (answer 1)
+await page.locator('.quiz-q[data-i="1"] .quiz-choice[data-j="1"]').click(); // wrong (answer 0)
+const quiz = await page.evaluate(() => ({
+  q0: document.querySelector('.quiz-q[data-i="0"] .quiz-why').textContent,
+  q1: document.querySelector('.quiz-q[data-i="1"] .quiz-why').textContent,
+  q1right: document.querySelector('.quiz-q[data-i="1"] .quiz-choice[data-j="0"]').classList.contains('right'),
+  locked: document.querySelector('.quiz-q[data-i="0"] .quiz-choice[data-j="0"]').disabled,
+  score: document.getElementById('quizScore').textContent,
+}));
+check(quiz.q0.startsWith('Right!') && quiz.q1.startsWith('Not quite.') && quiz.q1right && quiz.locked, `quiz feedback: "${quiz.q0.slice(0, 40)}" / "${quiz.q1.slice(0, 50)}"`);
+check(/Score: 1 of 6/.test(quiz.score), `quiz score: "${quiz.score}"`);
+for (let i = 2; i < 6; i++) await page.locator(`.quiz-q[data-i="${i}"] .quiz-choice`).first().click();
+const final = await page.evaluate(() => document.getElementById('quizScore').textContent);
+check(/All done! You got [0-6] of 6/.test(final), `quiz end: "${final.trim()}"`);
+await page.locator('#quizScore').scrollIntoViewIfNeeded();
+await page.locator('#quiz').screenshot({ path: `shot-${scenario}-quiz.png` });
+await page.locator('#quizReset').click();
+check(/Score: 0 of 6/.test(await page.evaluate(() => document.getElementById('quizScore').textContent)), 'Try again resets the quiz');
+
+// Switch off, survives a reload.
+await page.locator('#learnBtn').click();
+let L2 = await learnState();
+check(!L2.on && L2.pressed === 'false' && L2.stored === '0' && L2.visible === 0, `switch off hides every box (visible ${L2.visible}, stored ${L2.stored})`);
+await page.evaluate(() => scrollTo(0, 0));
+await page.screenshot({ path: `shot-${scenario}-learn-off-full.png`, fullPage: true });
+await page.reload();
+await page.waitForFunction(() => window.gpsdash?.state?.result, null, { timeout: 20000 });
+L2 = await learnState();
+check(!L2.on && L2.visible === 0, 'Learn mode stays off after a reload');
+
+// Phone width, Learn off then on.
 await page.setViewportSize({ width: 390, height: 844 });
 await page.waitForTimeout(800);
+const overflowOff = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 await page.screenshot({ path: `shot-${scenario}-mobile.png`, fullPage: false });
-const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-console.log('mobile horizontal overflow px:', overflow);
+await page.locator('#learnBtn').click();
+await page.waitForTimeout(500);
+L1 = await learnState();
+const overflowOn = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+const wide = await page.evaluate(() => [...document.querySelectorAll('main *')].filter((el) => el.getBoundingClientRect().right > innerWidth + 1 && !el.closest('.hours')).slice(0, 5).map((el) => `${el.tagName}.${el.className}`));
+check(L1.on && L1.stored === '1', 'switch back on is saved');
+console.log('mobile horizontal overflow px (learn off / on):', overflowOff, '/', overflowOn, wide.length ? `wide: ${wide.join(' ')}` : '');
+check(overflowOff === 0 && overflowOn === 0, 'no sideways scroll on a phone, Learn on or off');
+check(L1.diagramW <= 390 && L1.diagramW > 300, `diagram fits the phone (${Math.round(L1.diagramW)} px wide)`);
+await page.screenshot({ path: `shot-${scenario}-mobile-learn.png`, fullPage: false });
+await page.locator('#learn .diagram').screenshot({ path: `shot-${scenario}-mobile-diagram.png` });
+await page.locator('#todayLearn .term').first().click();
+await page.waitForTimeout(200);
+await page.screenshot({ path: `shot-${scenario}-mobile-glossary.png`, fullPage: false });
+check(await page.evaluate(() => document.getElementById('termDialog').open), 'glossary pop-up works on a phone');
+
 console.log('console:', errors.slice(0, 20));
+console.log(fails.length ? `LEARN CHECKS FAILED: ${fails.length}` : 'ALL LEARN CHECKS PASSED');
 await browser.close();
+process.exitCode = fails.length || errors.some((e) => e.startsWith('pageerror') || e.startsWith('error')) ? 1 : 0;

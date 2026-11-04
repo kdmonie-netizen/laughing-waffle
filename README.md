@@ -40,6 +40,16 @@ Days 1–3 use NOAA's full 3-day forecast (high confidence). Days 4–27 use the
 
 > This is a planning aid. Always confirm with your receiver's own fix status, residuals and check shots.
 
+## Learn mode
+
+The app is also a teaching tool. The **🎓 Learn mode** switch next to Refresh shows plain-language explanations written at about a 5th-grade reading level. It's on by default, and your browser remembers if you turn it off.
+
+- **Every section** gets a 💡 "What am I looking at?" box. Today's grade gets a "why" in plain words, each "Right now" tile gets one line, and each hour and day says what its grade means.
+- **Underlined words** (Kp, Bz, ionosphere, PDOP and 15 more) open a pop-up with a simple definition.
+- **Space Weather 101** (the *Learn* tab) has a picture of how the Sun's wind reaches your receiver in 5 numbered steps, the same steps in words, the whole word list, and a 6-question quiz with instant feedback.
+
+All the learner text lives in [`public/js/explain.js`](public/js/explain.js). `npm test` scores every line of it with the Flesch-Kincaid grade formula. The whole set must average grade 5.5 or below, and no single item may go above grade 7, so keep sentences short when you edit. The syllable counter behind that score is itself tested against dictionary counts and against text with known difficulty ([`test/readability.test.js`](test/readability.test.js)), so an easy score means easy text.
+
 ## Run it
 
 Needs Node 18 or newer. There are no dependencies to install.

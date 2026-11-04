@@ -150,9 +150,12 @@ export function mph(kmPerSec) {
 }
 
 // ------------------------------------------------------------ today summary
+/** "an A", "a B", "an F": the article that goes before a grade letter when read out loud. */
+const aGrade = (g) => `${/^[AEF]/.test(g) ? 'an' : 'a'} ${g}`;
+
 export function todayKid(day, now) {
   if (!day) return 'We could not get the space forecast right now, so there is no grade yet.';
-  const parts = [`<p><b>Today gets a ${day.grade}.</b> ${GRADE_KID[day.grade]}</p>`];
+  const parts = [`<p><b>Today gets ${aGrade(day.grade)}.</b> ${GRADE_KID[day.grade]}</p>`];
   const reasons = day.drivers.filter((d) => d.penalty >= 3);
   if (reasons.length) {
     parts.push(`<p><b>Why?</b></p><ul>${reasons.map((r) => `<li>${factorKid(r)}</li>`).join('')}</ul>`);
@@ -169,7 +172,7 @@ export function todayKid(day, now) {
     );
   }
   if (now && now.grade !== day.grade) {
-    parts.push(`<p><b>Right now</b> it is a ${now.grade}. Things can change hour by hour, just like weather.</p>`);
+    parts.push(`<p><b>Right now</b> it is ${aGrade(now.grade)}. Things can change hour by hour, just like weather.</p>`);
   }
   return parts.join('');
 }
@@ -203,8 +206,8 @@ export function statKid(key, v) {
     case 'aurora':
       if (v == null) return 'No reading right now.';
       if (v < 5) return 'No aurora over you. Good for GPS.';
-      if (v < 30) return 'Some aurora may be overhead. Signals may twinkle.';
-      return 'Aurora is likely right overhead. Expect twinkly signals.';
+      if (v < 30) return 'Some of the northern lights may be over you. Signals may twinkle.';
+      return 'The northern lights are likely right over you. Your signals will twinkle.';
     case 'sats':
       if (v == null) return 'Still loading where the satellites are.';
       return v.pdop <= 2
@@ -261,6 +264,28 @@ export const SECTIONS = {
     `When the Sun throws a ${term('cme', 'CME')}, scientists use computer models to guess when it will reach Earth. Pick one from the list and press Simulate. The model shows the cloud slowing down as it pushes through the ${term('solarwind', 'solar wind')}, like a ball slowing down in water.`,
   alerts:
     'These are the official warnings from the space weather forecasters. A watch means something might happen. A warning means it is about to happen. An alert means it is happening now.',
+  discussion:
+    `This is what the forecasters wrote, in their own words. It uses a lot of science talk. The 3-day forecast lists the ${term('kp', 'Kp')} they expect for every 3 hours.`,
+  sources:
+    'These links go to other space weather websites. You can use them to double-check this app. The dots at the bottom show which data came in. Green means it worked. Red means that data could not be reached.',
+  method:
+    `This is the recipe for the grade. Every hour starts with 100 points, like a perfect test score. Each problem in space takes some points away. More points left means a better grade. People close to the ${term('maglat', 'magnetic pole')} lose more points, because storms hit them harder.`,
+};
+
+// ------------------------------------------------- Space Weather 101 extras
+export const LEARN_INTRO =
+  'Space weather is like the weather outside, but it happens out in space. The Sun can send out storms. They can make your GPS less exact. Here is how it works, in 5 steps.';
+
+export const NEW_HERE = 'New here? Start with Space Weather 101.';
+
+export const QUIZ_TEXT = {
+  intro: 'Test what you know! Tap an answer to see if you are right.',
+  right: 'Right!',
+  wrong: 'Not quite. The answer is:',
+  score: 'Score:',
+  done: 'All done! You got',
+  perfect: 'A perfect score!',
+  again: 'Try again',
 };
 
 // ------------------------------------------------------------- hour + days
@@ -344,5 +369,6 @@ export function allText() {
   out.push(...Object.values(GRADE_KID), ...Object.values(SECTIONS));
   for (const s of STORY) out.push(s.text);
   for (const q of QUIZ) out.push(q.q, q.why);
+  out.push(LEARN_INTRO, NEW_HERE, QUIZ_TEXT.intro);
   return out.map((s) => s.replace(/<[^>]+>/g, ''));
 }

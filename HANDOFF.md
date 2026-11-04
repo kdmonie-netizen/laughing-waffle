@@ -2,7 +2,7 @@
 
 **Repo:** `kdmonie-netizen/laughing-waffle`
 **Branch:** `claude/gps-conditions-dashboard-c7d20v` (keep working here and push here)
-**Status:** the dashboard is done and pushed. Learn mode is about half done: the text is written and tested, but none of it shows on the page yet.
+**Status (4 Nov 2026):** the dashboard and Learn mode are both done and pushed. Steps 1–8 in section 5 are finished; see "What was done" there for the choices made.
 
 Read `README.md` first for what the app does and how the grade works. This file only covers what a new session needs to continue.
 
@@ -41,14 +41,16 @@ public/js/gnss.js            SGP4 satellites in view + DOP
 public/js/geo.js             magnetic latitude, sun elevation
 public/js/charts.js          canvas charts
 public/js/sims/*.js          magnetosphere sim, aurora map, CME/DBM, frame player
-public/js/explain.js         ← NEW: all Learn-mode text (not yet used by the page)
+public/js/explain.js         all Learn-mode text (used by app.js)
 test/core.test.js            25 tests: parsers, grading, SGP4/DOP, physics
-test/explain.test.js         ← NEW: 7 tests, including a reading-level check
+test/explain.test.js         9 tests: reading level of all learner text, page boxes all have text
+test/readability.js          Flesch-Kincaid + syllable counter (shared by the tests)
+test/readability.test.js     3 tests: the syllable counter vs dictionary counts and known-hard text
 test/helpers.js              synthetic SWPC/TLE data builders (tests only)
 test/e2e/smoke.mjs           browser smoke test with synthetic data + screenshots
 ```
 
-`npm test` runs both test files. **32 tests pass** as of the last commit.
+`npm test` runs all three test files. **37 tests pass** as of the last commit.
 
 ## 5. Learn mode: what exists and what's left
 
@@ -69,7 +71,19 @@ test/e2e/smoke.mjs           browser smoke test with synthetic data + screenshot
 | `mph(kmPerSec)` | Speed converter used in the text |
 | `allText()` | All learner text with tags stripped, for the reading-level test |
 
-### Still to do
+### What was done (4 Nov 2026, local session on the owner's PC)
+
+All 8 steps below are finished. Choices worth knowing:
+
+- The switch is on by default. `<body class="learn-on">` is in the HTML, so the boxes show even before the script runs. The choice is only saved when the switch is clicked.
+- Every card has a box, including three new `SECTIONS` texts: `discussion`, `sources` and `method`.
+- The Space Weather 101 section sits just before "How it's graded" and stays visible with Learn mode off. It is its own section with its own tab.
+- The diagram is one tall SVG (viewBox 540×640): Sun, wind and shield on top, an "up close" panel below with the satellite, the ionosphere band, the bent signal (gold) beside the straight path (dashed) and the tripod. Numbered badges 1–5 match the story. Animations stop under `prefers-reduced-motion`.
+- Quiz: all 6 questions at once. A tap locks that question, shows right/wrong and `why`, and keeps a score; "Try again" resets it.
+- Reading level (step 6): the old syllable counter undercounted (53% of test words right, −42 syllables short over 126 words; it dropped the "-ed" in "started" and read "radio" as 2). The new one in `test/readability.js` gets 89% exactly right with a net bias of −4. Real scores: all learner text **2.5** overall, worst item **5.8**, worst live line **5.5**; dense README text **10.9**, a technical paragraph **17.3**, "The cat sat on the mat." −1.4. So the text really is easy. Two aurora tile lines were reworded; nothing else needed shortening.
+- "Today gets an F" now uses the right a/an.
+
+### The original step list
 
 1. **Learn mode switch.** Add a `🎓 Learn mode` chip next to Refresh in `.controls` (`index.html`). Toggle `document.body.classList` `learn-on`, save it in `localStorage` (key `gpsdash:learn`, wrapped in try/catch like the settings code), and **default it to on**, since the owner wants a learning tool.
 2. **Explanation boxes.** Add `<div class="learn" data-topic="KEY"></div>` inside each card in `index.html`, using the `SECTIONS` keys above. In `app.js`, fill each one from `SECTIONS[topic]` once at boot. CSS: `.learn { display:none }` and `body.learn-on .learn { display:block }`. Give them a friendly style (soft accent border, 🎓 or 💡 marker, slightly larger text).
@@ -97,13 +111,13 @@ test/e2e/smoke.mjs           browser smoke test with synthetic data + screenshot
 ## 6. How to test without live data
 
 ```bash
-npm test                                    # 32 unit tests
+npm test                                    # 37 unit tests
 PORT=8099 node server.js &                  # serve the app
 node test/e2e/smoke.mjs storm               # synthetic storm day → expect today = F
 node test/e2e/smoke.mjs quiet               # synthetic quiet day → expect today = A
 ```
 
-The smoke test intercepts every external request and serves synthetic data in the real SWPC/CelesTrak/DONKI formats from `test/helpers.js`. It prints the grades, any console errors, and the phone-width horizontal overflow (should be 0). It writes `shot-*.png` screenshots to the current directory, so run it from a scratch folder or delete the screenshots afterward. Don't commit them. Add steps there to toggle Learn mode, open a glossary word, and answer a quiz question.
+The smoke test intercepts every external request and serves synthetic data in the real SWPC/CelesTrak/DONKI formats from `test/helpers.js`. It prints the grades, any console errors, and the phone-width horizontal overflow (should be 0). It writes `shot-*.png` screenshots to the current directory, so run it from a scratch folder or delete the screenshots afterward. Don't commit them. It also runs 19 Learn-mode checks: on by default, every box filled, the glossary pop-up, the quiz, switching off and surviving a reload, and phone width with Learn on and off. It prints PASS/FAIL per check and exits non-zero on any failure. Off the cloud box, set `NODE_PATH` to a folder with `playwright` installed and `PW_CHANNEL=chrome` to use the installed Google Chrome.
 
 ## 7. Known caveats to keep telling the owner
 

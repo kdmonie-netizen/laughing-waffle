@@ -9,6 +9,7 @@ import { MagnetosphereSim } from './sims/magnetosphere.js';
 import { FramePlayer } from './sims/player.js';
 import { drawAuroraMap, loadLand } from './sims/aurora.js';
 import { dbmArrival, enlilEarthArrivals, cmeAnalyses, CmeAnimation } from './sims/cme.js';
+import * as L from './explain.js';
 
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -220,6 +221,7 @@ function renderToday() {
   if (!today) {
     $('todayGrade').textContent = '?';
     $('todayVerdict').textContent = 'No Kp forecast available';
+    $('todayLearn').innerHTML = `<p>${L.todayKid(null)}</p>`;
     return;
   }
   card.classList.add(gClass(today.grade));
@@ -241,18 +243,28 @@ function renderToday() {
   const rt = state.rt;
   const geoNow = nearestGeometry(new Date());
   const kpC = rt.kpNow == null ? null : kpColor(rt.kpNow);
+  const kid = {
+    kp: L.statKid('kp', rt.kpNow),
+    bz: L.statKid('bz', rt.bz30),
+    speed: L.statKid('speed', rt.speed),
+    xray: L.statKid('xray', rt.xrayFlux),
+    protons: L.statKid('protons', rt.protonFlux),
+    aurora: L.statKid('aurora', rt.aurora),
+    sats: L.statKid('sats', geoNow ? { count: geoNow.count, pdop: geoNow.pdop } : null),
+    mlat: L.statKid('mlat', r.mlat),
+  };
   const stats = [
-    { k: 'Kp now (est.)', v: rt.kpNow?.toFixed(2) ?? '–', d: rt.kpNow != null ? `G${P.gScaleFromKp(rt.kpNow)} storm scale` : 'no data', c: kpC },
-    { k: 'IMF Bz (30 min)', v: rt.bz30 != null ? `${rt.bz30.toFixed(1)} nT` : '–', d: rt.bz30 == null ? '' : rt.bz30 < -10 ? 'strongly south' : rt.bz30 < -3 ? 'south: loading' : 'north/neutral', c: rt.bz30 == null ? null : rt.bz30 < -10 ? css('--bad') : rt.bz30 < -3 ? css('--fair') : css('--good') },
-    { k: 'Solar wind', v: rt.speed != null ? `${Math.round(rt.speed)} km/s` : '–', d: rt.density != null ? `${rt.density.toFixed(1)} p/cm³` : '', c: rt.speed == null ? null : rt.speed > 700 ? css('--bad') : rt.speed > 500 ? css('--fair') : css('--good') },
-    { k: 'X-ray', v: P.flareClass(rt.xrayFlux), d: rt.rNow ? `R${rt.rNow} radio blackout` : 'no blackout', c: rt.rNow >= 3 ? css('--bad') : rt.rNow ? css('--fair') : css('--good') },
-    { k: 'Protons ≥10 MeV', v: rt.protonFlux != null ? `${rt.protonFlux < 10 ? rt.protonFlux.toFixed(2) : Math.round(rt.protonFlux)} pfu` : '–', d: rt.sNow ? `S${rt.sNow} radiation storm` : 'below S1', c: rt.sNow ? css('--poor') : css('--good') },
-    { k: 'Aurora overhead', v: rt.aurora != null ? `${Math.round(rt.aurora)}%` : '–', d: 'OVATION at your site', c: rt.aurora == null ? null : rt.aurora >= 30 ? css('--bad') : rt.aurora >= 10 ? css('--fair') : css('--good') },
-    { k: 'Satellites / PDOP', v: geoNow ? `${geoNow.count} / ${Number.isFinite(geoNow.pdop) ? geoNow.pdop.toFixed(1) : '∞'}` : '–', d: geoNow ? `above ${settings.elevationMask}° mask` : 'element sets loading', c: geoNow ? (geoNow.pdop > 4 ? css('--fair') : css('--good')) : null },
-    { k: 'Magnetic latitude', v: `${r.mlat.toFixed(1)}°`, d: latitudeBand(r.mlat), c: null },
+    { k: 'Kp now (est.)', v: rt.kpNow?.toFixed(2) ?? '–', d: rt.kpNow != null ? `G${P.gScaleFromKp(rt.kpNow)} storm scale` : 'no data', c: kpC, kid: kid.kp },
+    { k: 'IMF Bz (30 min)', v: rt.bz30 != null ? `${rt.bz30.toFixed(1)} nT` : '–', d: rt.bz30 == null ? '' : rt.bz30 < -10 ? 'strongly south' : rt.bz30 < -3 ? 'south: loading' : 'north/neutral', c: rt.bz30 == null ? null : rt.bz30 < -10 ? css('--bad') : rt.bz30 < -3 ? css('--fair') : css('--good'), kid: kid.bz },
+    { k: 'Solar wind', v: rt.speed != null ? `${Math.round(rt.speed)} km/s` : '–', d: rt.density != null ? `${rt.density.toFixed(1)} p/cm³` : '', c: rt.speed == null ? null : rt.speed > 700 ? css('--bad') : rt.speed > 500 ? css('--fair') : css('--good'), kid: kid.speed },
+    { k: 'X-ray', v: P.flareClass(rt.xrayFlux), d: rt.rNow ? `R${rt.rNow} radio blackout` : 'no blackout', c: rt.rNow >= 3 ? css('--bad') : rt.rNow ? css('--fair') : css('--good'), kid: kid.xray },
+    { k: 'Protons ≥10 MeV', v: rt.protonFlux != null ? `${rt.protonFlux < 10 ? rt.protonFlux.toFixed(2) : Math.round(rt.protonFlux)} pfu` : '–', d: rt.sNow ? `S${rt.sNow} radiation storm` : 'below S1', c: rt.sNow ? css('--poor') : css('--good'), kid: kid.protons },
+    { k: 'Aurora overhead', v: rt.aurora != null ? `${Math.round(rt.aurora)}%` : '–', d: 'OVATION at your site', c: rt.aurora == null ? null : rt.aurora >= 30 ? css('--bad') : rt.aurora >= 10 ? css('--fair') : css('--good'), kid: kid.aurora },
+    { k: 'Satellites / PDOP', v: geoNow ? `${geoNow.count} / ${Number.isFinite(geoNow.pdop) ? geoNow.pdop.toFixed(1) : '∞'}` : '–', d: geoNow ? `above ${settings.elevationMask}° mask` : 'element sets loading', c: geoNow ? (geoNow.pdop > 4 ? css('--fair') : css('--good')) : null, kid: kid.sats },
+    { k: 'Magnetic latitude', v: `${r.mlat.toFixed(1)}°`, d: latitudeBand(r.mlat), c: null, kid: kid.mlat },
   ];
   $('nowStats').innerHTML = stats
-    .map((s) => `<div class="stat" style="${s.c ? `--c:${s.c}` : ''}"><div class="k">${s.k}</div><div class="v">${esc(s.v)}</div><div class="d">${esc(s.d)}</div></div>`)
+    .map((s) => `<div class="stat" style="${s.c ? `--c:${s.c}` : ''}"><div class="k">${s.k}</div><div class="v">${esc(s.v)}</div><div class="d">${esc(s.d)}</div><div class="learn">${esc(s.kid)}</div></div>`)
     .join('');
 
   const RT_KEYS = ['bz', 'speed', 'flareNow', 'protonNow', 'aurora'];
@@ -262,6 +274,8 @@ function renderToday() {
   $('todayDrivers').innerHTML = items.length
     ? items.map((d) => `<li>${esc(d.label)} <span class="pen">−${d.penalty.toFixed(0)}</span></li>`).join('')
     : '<li>Nothing significant. Quiet space weather and good geometry.</li>';
+
+  $('todayLearn').innerHTML = L.todayKid(today, now) + `<p><a href="#learn">${L.NEW_HERE}</a></p>`;
 }
 
 function nearestGeometry(t) {
@@ -307,7 +321,8 @@ function showHourDetail(h) {
   if (!h) return;
   const fac = h.factors.filter((f) => f.penalty >= 0.5);
   $('hourDetail').innerHTML = `<b>${fmtDay(h.time)} ${fmtHour(h.time)}</b>: grade <b>${h.grade}</b> (${h.score}), ${esc(h.verdict)} · Kp ${h.kp.toFixed(2)} (${h.kpKind}) · ${h.sunlit ? 'daylight' : 'night'}<br>` +
-    (fac.length ? fac.map((f) => `${esc(f.label)} <span class="muted">−${f.penalty.toFixed(1)}</span>`).join(' · ') : '<span class="muted">No penalties</span>');
+    (fac.length ? fac.map((f) => `${esc(f.label)} <span class="muted">−${f.penalty.toFixed(1)}</span>`).join(' · ') : '<span class="muted">No penalties</span>') +
+    `<div class="learn">${L.hourKid(h)}</div>`;
 }
 
 function renderDays() {
@@ -321,6 +336,7 @@ function renderDays() {
         <ul>${d.drivers.filter((x) => x.penalty >= 1).map((x) => `<li>${esc(x.label)}</li>`).join('') || '<li>Clean</li>'}
         ${cmes.map((c) => `<li style="color:var(--poor)">CME ${c.glancing ? 'glancing blow' : 'arrival'} ≈ ${fmtTime(c.arrival)} (NASA model)</li>`).join('')}</ul>
         <div class="muted small">${esc(d.source)}</div>
+        <div class="learn">${L.dayKid(d)}</div>
       </div>`;
     })
     .join('');
@@ -708,6 +724,131 @@ function renderLinks() {
   ).join('');
 }
 
+// --------------------------------------------------------------- learn mode
+const LEARN_KEY = 'gpsdash:learn';
+
+function learnStored() {
+  try {
+    const v = localStorage.getItem(LEARN_KEY);
+    return v == null ? true : v === '1'; // on by default: this is a learning tool
+  } catch {
+    return true;
+  }
+}
+
+function applyLearn(on) {
+  document.body.classList.toggle('learn-on', on);
+  $('learnBtn').setAttribute('aria-pressed', String(on));
+}
+
+function setupLearn() {
+  applyLearn(learnStored());
+  $('learnBtn').addEventListener('click', () => {
+    const on = !document.body.classList.contains('learn-on');
+    applyLearn(on);
+    try {
+      localStorage.setItem(LEARN_KEY, on ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  });
+
+  // Static "What am I looking at?" boxes.
+  document.querySelectorAll('.learn[data-topic]').forEach((el) => {
+    const text = L.SECTIONS[el.dataset.topic];
+    if (text) el.innerHTML = `<b class="learn-q">What am I looking at?</b> ${text}`;
+  });
+
+  // Space Weather 101.
+  $('learnIntro').textContent = L.LEARN_INTRO;
+  $('storySteps').innerHTML = L.STORY.map((s) => {
+    const [, num, title] = s.title.match(/^(\d+)\.\s*(.*)$/) || [null, '', s.title];
+    return `<li><span class="step-num" aria-hidden="true">${num}</span><div><b>${esc(title)}</b><p>${s.text}</p></div></li>`;
+  }).join('');
+  $('glossGrid').innerHTML = Object.entries(L.GLOSSARY)
+    .sort(([, a], [, b]) => a.word.localeCompare(b.word))
+    .map(([k, g]) => `<div class="gloss-card" id="gloss-${k}"><b>${esc(g.word)}</b><p>${esc(g.text)}</p></div>`)
+    .join('');
+  setupGlossaryDialog();
+  setupQuiz();
+}
+
+function setupGlossaryDialog() {
+  const dlg = $('termDialog');
+  let current = null;
+  document.addEventListener('click', (e) => {
+    const btn = e.target.closest('.term');
+    if (!btn) return;
+    const g = L.GLOSSARY[btn.dataset.term];
+    if (!g) return;
+    e.preventDefault();
+    current = btn.dataset.term;
+    $('termWord').textContent = g.word;
+    $('termText').textContent = g.text;
+    if (!dlg.open) dlg.showModal();
+  });
+  $('termAll').addEventListener('click', () => {
+    dlg.close();
+    const card = $(`gloss-${current}`) || $('glossary');
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.remove('flash');
+    void card.offsetWidth; // restart the highlight animation
+    card.classList.add('flash');
+  });
+}
+
+function setupQuiz() {
+  const T = L.QUIZ_TEXT;
+  const box = $('quiz');
+  let right = 0;
+  let done = 0;
+  $('quizIntro').textContent = T.intro;
+  const score = () => {
+    $('quizScore').innerHTML =
+      done < L.QUIZ.length
+        ? `${T.score} <b>${right}</b> of ${L.QUIZ.length}`
+        : `${T.done} <b>${right} of ${L.QUIZ.length}</b>.${right === L.QUIZ.length ? ` ${T.perfect} 🎉` : ''} <button type="button" class="chip" id="quizReset">${T.again}</button>`;
+  };
+  const build = () => {
+    right = 0;
+    done = 0;
+    box.innerHTML =
+      L.QUIZ.map(
+        (q, i) => `<fieldset class="quiz-q" data-i="${i}"><legend>${i + 1}. ${esc(q.q)}</legend>
+          <div class="quiz-choices">${q.choices.map((c, j) => `<button type="button" class="quiz-choice" data-j="${j}">${esc(c)}</button>`).join('')}</div>
+          <p class="quiz-why" hidden></p></fieldset>`,
+      ).join('') + '<div class="quiz-score" id="quizScore" aria-live="polite"></div>';
+    score();
+  };
+  box.addEventListener('click', (e) => {
+    if (e.target.id === 'quizReset') {
+      build();
+      box.querySelector('.quiz-choice')?.focus();
+      return;
+    }
+    const b = e.target.closest('.quiz-choice');
+    if (!b) return;
+    const fs = b.closest('.quiz-q');
+    if (fs.dataset.done) return;
+    const q = L.QUIZ[+fs.dataset.i];
+    const ok = +b.dataset.j === q.answer;
+    fs.dataset.done = ok ? 'right' : 'wrong';
+    done++;
+    if (ok) right++;
+    fs.querySelectorAll('.quiz-choice').forEach((x) => {
+      x.disabled = true;
+      if (+x.dataset.j === q.answer) x.classList.add('right');
+    });
+    if (!ok) b.classList.add('wrong');
+    const why = fs.querySelector('.quiz-why');
+    why.hidden = false;
+    why.className = `quiz-why ${ok ? 'ok' : 'no'}`;
+    why.innerHTML = `<b>${ok ? T.right : `${T.wrong} ${esc(q.choices[q.answer])}.`}</b> ${esc(q.why)}`;
+    score();
+  });
+  build();
+}
+
 // ------------------------------------------------------------------- wiring
 function setupControls() {
   const sel = $('profileSel');
@@ -789,6 +930,7 @@ function setupControls() {
 }
 
 function boot() {
+  setupLearn();
   setupControls();
   renderLinks();
   setupSims();

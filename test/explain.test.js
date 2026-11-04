@@ -2,24 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import * as E from '../public/js/explain.js';
+import { fkGrade } from './readability.js';
 
-// Flesch-Kincaid grade level. Syllables are estimated with the usual vowel-group
-// heuristic, which is close enough to flag text that drifts above grade 5–6.
-export function syllables(word) {
-  let w = word.toLowerCase().replace(/[^a-z]/g, '');
-  if (!w) return 0;
-  if (w.length <= 3) return 1;
-  w = w.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/, '').replace(/^y/, '');
-  const m = w.match(/[aeiouy]{1,2}/g);
-  return Math.max(1, m ? m.length : 1);
-}
-
-export function fkGrade(text) {
-  const sentences = text.split(/[.!?]+(?:\s|$)/).filter((s) => /[a-z]/i.test(s)).length || 1;
-  const words = text.match(/[A-Za-z0-9’']+/g) || [];
-  const syl = words.reduce((s, w) => s + syllables(w), 0);
-  return 0.39 * (words.length / sentences) + 11.8 * (syl / words.length) - 15.59;
-}
+const strip = (s) => s.replace(/<[^>]+>/g, '');
 
 test('learn-mode text reads at about a 5th-grade level overall', () => {
   const all = E.allText().join(' ');
@@ -34,6 +19,36 @@ test('no single explanation reads above 7th grade', () => {
     .sort((a, b) => b.g - a.g);
   for (const w of worst.slice(0, 3)) console.log(`  ${w.g.toFixed(1)}  ${w.t.slice(0, 70)}…`);
   assert.ok(worst[0].g <= 7, `"${worst[0].t.slice(0, 60)}…" is grade ${worst[0].g.toFixed(1)}`);
+});
+
+test('the live "right now", hour and day lines also read below 7th grade', () => {
+  const lines = [
+    ...[0.7, 3.3, 4.3, 5.7, 8].map((v) => E.statKid('kp', v)),
+    ...[2, -6, -15].map((v) => E.statKid('bz', v)),
+    ...[380, 600, 820].map((v) => E.statKid('speed', v)),
+    ...[3e-7, 2e-5, 3e-4].map((v) => E.statKid('xray', v)),
+    ...[0.3, 25].map((v) => E.statKid('protons', v)),
+    ...[1, 12, 45].map((v) => E.statKid('aurora', v)),
+    ...[{ count: 11, pdop: 1.6 }, { count: 8, pdop: 3.1 }, { count: 6, pdop: 5.4 }].map((v) => E.statKid('sats', v)),
+    ...[65, 48, 20].map((v) => E.statKid('mlat', v)),
+    ...'ABCDF'.split('').map((g) => E.dayKid({ grade: g })),
+    E.hourKid({ grade: 'D', factors: [{ key: 'kp', label: 'Kp 5.3 geomagnetic activity', penalty: 30 }] }),
+    E.hourKid({ grade: 'A', factors: [] }),
+    ...['kp', 'flare', 'flareNow', 'proton', 'protonNow', 'scint', 'bz', 'speed', 'aurora', 'pdop', 'flux'].map((key) =>
+      E.factorKid({ key, label: key === 'kp' ? 'Kp 6.0 geomagnetic activity' : 'x 5' }),
+    ),
+  ].map(strip);
+  const worst = lines.map((t) => ({ t, g: fkGrade(t) })).sort((a, b) => b.g - a.g)[0];
+  console.log(`  worst live line: ${worst.g.toFixed(1)}  ${worst.t.slice(0, 70)}`);
+  assert.ok(worst.g <= 7, `"${worst.t}" is grade ${worst.g.toFixed(1)}`);
+});
+
+test('every explanation box on the page has text', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const html = await readFile(new URL('../public/index.html', import.meta.url), 'utf8');
+  const topics = [...html.matchAll(/class="learn" data-topic="(\w+)"/g)].map((m) => m[1]);
+  assert.ok(topics.length >= 20, `only ${topics.length} boxes`);
+  for (const t of topics) assert.ok(E.SECTIONS[t], `no SECTIONS text for data-topic="${t}"`);
 });
 
 test('every grading factor has a plain-language explanation', () => {
@@ -83,6 +98,7 @@ test('todayKid explains the grade, the reasons and the best window', () => {
   assert.match(html, /Best time to work/);
   assert.match(html, /Right now<\/b> it is a D/);
   assert.match(E.todayKid({ grade: 'A', drivers: [], bestWindow: null }), /Space is calm/);
+  assert.match(E.todayKid({ grade: 'F', drivers: [], bestWindow: null }), /Today gets an F\./);
 });
 
 test('quiz answers point at a real choice', () => {
