@@ -58,6 +58,58 @@ test('parse45Day splits Ap and F10.7 blocks', () => {
   assert.equal(r.ap[44].date.toISOString().slice(0, 10), '2026-12-18');
 });
 
+// Real NOAA samples saved 4 Nov 2026 (test/fixtures/). The solar wind files
+// list SOLAR1 (active) and ACE (inactive) side by side, newest first.
+const fixture = async (name) => {
+  const { readFile } = await import('node:fs/promises');
+  const text = await readFile(new URL(`./fixtures/${name}`, import.meta.url), 'utf8');
+  return name.endsWith('.json') ? JSON.parse(text) : text;
+};
+
+test('parsePlasma reads the real-time wind file: active spacecraft only, oldest first', async () => {
+  const rows = P.parsePlasma(await fixture('rtsw_wind_1m.json'));
+  assert.deepEqual(rows.map((r) => r.speed), [374.3, 371.6, 372.7, 374.1, 375.7]); // SOLAR1 only
+  assert.equal(rows.at(-1).time.toISOString(), '2026-11-04T21:33:00.000Z'); // 21:34 has only an inactive ACE row
+  assert.equal(rows.at(-1).density, 1.48);
+  assert.ok(rows.every((r, i) => i === 0 || r.time > rows[i - 1].time));
+});
+
+test('parseMag reads the real-time magnetometer file: active spacecraft only, oldest first', async () => {
+  const rows = P.parseMag(await fixture('rtsw_mag_1m.json'));
+  assert.deepEqual(rows.map((r) => r.bz), [-1.41, -1.27, -0.91, -1.16, -0.89, -0.47]); // not ACE's −2.3…−2.9
+  assert.equal(rows.at(-1).bt, 2.86);
+  assert.equal(rows.at(-1).time.toISOString(), '2026-11-04T21:35:00.000Z');
+});
+
+test('real-time files: inactive decoys never leak in, and files without the flag still work', () => {
+  const w = P.parsePlasma(H.rtswWind(NOW, { speed: 700 }, 60));
+  const m = P.parseMag(H.rtswMag(NOW, { bz: -12 }, 60));
+  assert.equal(w.length, 61);
+  assert.equal(m.length, 61);
+  assert.ok(w.every((r) => r.speed < 1000 && r.density < 100), 'ACE decoy speed leaked in');
+  assert.ok(m.every((r) => r.bz > -20 && r.bt < 50), 'ACE decoy Bz leaked in');
+  assert.equal(+w.at(-1).time, +NOW);
+  // Old SWPC table shape (no `active` field) still parses.
+  assert.equal(P.parsePlasma(H.plasmaArrays(NOW, {}, 10)).length, 11);
+  assert.equal(P.parseMag(H.magArrays(NOW, {}, 10)).length, 11);
+});
+
+test('parse45Day reads NOAA’s 45-day JSON and its new text file the same way', async () => {
+  const j = P.parse45Day(await fixture('45-day-forecast.json'));
+  const t = P.parse45Day(await fixture('45-day-forecast.txt'));
+  for (const r of [j, t]) {
+    assert.equal(r.ap.length, 45);
+    assert.equal(r.f107.length, 45);
+    assert.equal(r.ap[0].date.toISOString(), '2026-11-04T00:00:00.000Z');
+    assert.equal(r.ap[0].ap, 5);
+    assert.equal(r.ap[23].ap, 30); // 27 Nov
+    assert.equal(r.f107[0].f107, 100);
+    assert.equal(r.f107[44].f107, 80);
+  }
+  assert.deepEqual(j.ap.map((x) => x.ap), t.ap.map((x) => x.ap));
+  assert.deepEqual(j.f107.map((x) => x.f107), t.f107.map((x) => x.f107));
+});
+
 test('parseIssued reads the SWPC issue stamp', () => {
   assert.equal(P.parseIssued(':Issued: 2026 Nov 03 2105 UTC').toISOString(), '2026-11-03T21:05:00.000Z');
 });

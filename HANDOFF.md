@@ -42,7 +42,8 @@ public/js/geo.js             magnetic latitude, sun elevation
 public/js/charts.js          canvas charts
 public/js/sims/*.js          magnetosphere sim, aurora map, CME/DBM, frame player
 public/js/explain.js         all Learn-mode text (used by app.js)
-test/core.test.js            25 tests: parsers, grading, SGP4/DOP, physics
+test/core.test.js            29 tests: parsers (incl. real NOAA samples), grading, SGP4/DOP, physics
+test/fixtures/               real NOAA samples (rtsw wind/mag, 45-day JSON + text), saved 4 Nov 2026
 test/explain.test.js         9 tests: reading level of all learner text, page boxes all have text
 test/readability.js          Flesch-Kincaid + syllable counter (shared by the tests)
 test/readability.test.js     3 tests: the syllable counter vs dictionary counts and known-hard text
@@ -50,7 +51,7 @@ test/helpers.js              synthetic SWPC/TLE data builders (tests only)
 test/e2e/smoke.mjs           browser smoke test with synthetic data + screenshots
 ```
 
-`npm test` runs all three test files. **37 tests pass** as of the last commit.
+`npm test` runs all three test files. **41 tests pass** as of the last commit.
 
 ## 5. Learn mode: what exists and what's left
 
@@ -111,7 +112,7 @@ All 8 steps below are finished. Choices worth knowing:
 ## 6. How to test without live data
 
 ```bash
-npm test                                    # 37 unit tests
+npm test                                    # 41 unit tests
 PORT=8099 node server.js &                  # serve the app
 node test/e2e/smoke.mjs storm               # synthetic storm day → expect today = F
 node test/e2e/smoke.mjs quiet               # synthetic quiet day → expect today = A
@@ -121,6 +122,7 @@ The smoke test intercepts every external request and serves synthetic data in th
 
 ## 7. Known caveats to keep telling the owner
 
-- The app has **never been run against live NOAA data**, because the hosts are blocked in the cloud container. The parsers follow SWPC's documented formats and accept both of its JSON shapes. The first real run should be checked using the "Feed status" chips at the bottom of the page.
+- **First live run: 4 Nov 2026, on the owner's PC** (the cloud container still can't reach NOAA). Three files had gone: `products/solar-wind/plasma-1-day.json`, `mag-1-day.json` and `text/45-day-ap-forecast.txt` all returned 404. They were replaced by `json/rtsw/rtsw_wind_1m.json`, `json/rtsw/rtsw_mag_1m.json` and `json/45-day-forecast.json`. The rtsw files list every L1 spacecraft side by side (SOLAR1, ACE, IMAP), newest first; the parser keeps only `active: true` rows, because in the same minute ACE and SOLAR1 differ (Bz −2.4 vs −0.9). The new 45-day text file's title also contains "F10.7", which broke the old text parser, so it now splits at the "45-DAY F10.7" heading. Real samples are in `test/fixtures/`. After the fix every NOAA and CelesTrak feed loads live.
+- **NASA DONKI** (CME list and modelled arrivals) answered 503 and then 429 "too many requests" on the shared `DEMO_KEY`. A free personal key from https://api.nasa.gov goes in `nasaApiKey` in `config.js`. Signing up is the owner's call.
 - SpaceWeatherLive and Spaceweather Horizon have no open data feeds, so they're cross-check links, not data sources.
 - To publish the site: merge to `main`, then go to GitHub → Settings → Pages → Source: GitHub Actions (`.github/workflows/pages.yml` is already there).

@@ -11,9 +11,13 @@ export const SOURCES = {
   kp1m: `${SWPC}/json/planetary_k_index_1m.json`,
   scales: `${SWPC}/products/noaa-scales.json`,
 
-  // --- NOAA SWPC: real-time solar wind at L1 (DSCOVR/ACE) -----------------
-  plasma: `${SWPC}/products/solar-wind/plasma-1-day.json`,
-  mag: `${SWPC}/products/solar-wind/mag-1-day.json`,
+  // --- NOAA SWPC: real-time solar wind at L1 --------------------------------
+  // One row per minute per spacecraft (e.g. SOLAR1, ACE, IMAP) for the last
+  // ~24 h; `active: true` marks the one NOAA is using. These replaced
+  // products/solar-wind/plasma-1-day.json and mag-1-day.json (404 since late
+  // 2026). About 4 MB raw, ~250 KB compressed, which browsers ask for.
+  plasma: `${SWPC}/json/rtsw/rtsw_wind_1m.json`,
+  mag: `${SWPC}/json/rtsw/rtsw_mag_1m.json`,
 
   // --- NOAA SWPC: GOES X-ray flares + protons ------------------------------
   xray: `${SWPC}/json/goes/primary/xrays-1-day.json`,
@@ -22,7 +26,8 @@ export const SOURCES = {
   // --- NOAA SWPC: text forecasts (3, 27 and 45 days out) -------------------
   forecast3: `${SWPC}/text/3-day-forecast.txt`,
   outlook27: `${SWPC}/text/27-day-outlook.txt`,
-  ap45: `${SWPC}/text/45-day-ap-forecast.txt`,
+  // 45-day Ap + F10.7. JSON replaced text/45-day-ap-forecast.txt (404).
+  ap45: `${SWPC}/json/45-day-forecast.json`,
   discussion: `${SWPC}/text/discussion.txt`,
   alerts: `${SWPC}/products/alerts.json`,
 

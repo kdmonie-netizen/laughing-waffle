@@ -36,8 +36,9 @@ const routes = {
   'noaa-planetary-k-index-forecast.json': H.kpForecastArrays(now, kps),
   'planetary_k_index_1m.json': kp1m,
   'noaa-scales.json': H.scalesJSON(now, storm ? { g: [3, 2, 1], rMinor: [55, 50, 45], rMajor: [15, 15, 10], sProb: [25, 15, 10] } : {}),
-  'plasma-1-day.json': H.plasmaArrays(now, storm ? { speed: 720, density: 18 } : {}),
-  'mag-1-day.json': H.magArrays(now, storm ? { bz: -16, bt: 22 } : {}),
+  'rtsw_wind_1m.json': H.rtswWind(now, storm ? { speed: 720, density: 18 } : {}),
+  'rtsw_mag_1m.json': H.rtswMag(now, storm ? { bz: -16, bt: 22 } : {}),
+  '45-day-forecast.json': H.ap45JSON(now, Array.from({ length: 45 }, (_, i) => [5, 8, 12, 25, 6][i % 5]), Array.from({ length: 45 }, (_, i) => 150 + i)),
   'xrays-1-day.json': xray,
   'integral-protons-1-day.json': prot,
   'alerts.json': [{ product_id: 'K06A', issue_datetime: iso(new Date(now - 3600000)), message: 'Space Weather Message Code: ALTK06\r\nSerial Number: 1\r\nIssue Time: test\r\n\r\nALERT: Geomagnetic K-index of 6\r\nThreshold Reached: test\r\n(TEST DATA)' }],
@@ -47,7 +48,6 @@ const routes = {
 const texts = {
   '3-day-forecast.txt': ':Product: 3-Day Forecast\n:Issued: test\n(TEST DATA) NOAA Kp index breakdown...',
   '27-day-outlook.txt': H.outlook27Text(now, Array.from({ length: 27 }, (_, i) => [150 + i, [5, 8, 12, 25, 6][i % 5], [2, 3, 4, 5, 2][i % 5]])),
-  '45-day-ap-forecast.txt': H.ap45Text(now, Array.from({ length: 45 }, (_, i) => [5, 8, 12, 25, 6][i % 5]), Array.from({ length: 45 }, (_, i) => 150 + i)),
   'discussion.txt': ':Product: Forecast Discussion\n(TEST DATA)',
 };
 const donkiEnlil = [{ simulationID: 'TEST-ENLIL', estimatedShockArrivalTime: new Date(+now + 5 * 86400000).toISOString(), isEarthGB: false, kp_18: 5, kp_90: 6, kp_135: 7, kp_180: 7, cmeInputs: [{ cmeStartTime: new Date(+now - 86400000).toISOString(), speed: 1100, halfAngle: 40 }], link: 'https://example.invalid' }];

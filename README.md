@@ -8,10 +8,10 @@ A one-stop GPS/GNSS conditions dashboard. It answers one question: **is today a 
 |---|---|---|
 | NOAA SWPC: planetary Kp (observed, 1-minute estimate, forecast) | Geomagnetic storm level, the main driver of RTK/ionosphere trouble | past 7 days → +3 days |
 | NOAA SWPC: `noaa-scales.json` | G/S/R scales now, plus flare and proton-event probabilities | +3 days |
-| NOAA SWPC: DSCOVR/ACE solar wind (plasma + magnetic field) | Bz, Bt, speed, density at L1, about 30–60 min ahead of Earth | last 24 h |
+| NOAA SWPC: real-time solar wind (`json/rtsw/`, plasma + magnetic field) | Bz, Bt, speed, density at L1, about 30–60 min ahead of Earth. The file lists every L1 spacecraft (SOLAR1, ACE, IMAP); the app uses the one NOAA marks active | last 24 h |
 | NOAA SWPC: GOES X-ray + ≥10 MeV protons | Flares (radio bursts) and radiation storms | last 24 h |
 | NOAA SWPC: 27-day outlook | Daily largest Kp, Ap, F10.7 | +27 days |
-| USAF/NOAA: 45-day Ap forecast | Daily Ap, F10.7 | +45 days |
+| USAF/NOAA: 45-day Ap forecast (`json/45-day-forecast.json`) | Daily Ap, F10.7 | +45 days |
 | NOAA SWPC: OVATION aurora | Is the auroral oval (scintillation zone) over your site? | nowcast |
 | NOAA SWPC: WSA-Enlil, OVATION, LASCO C3, SUVI animations, D-RAP | Model and imagery players | Enlil includes forecast days |
 | NASA CCMC DONKI | CME catalogue + WSA-Enlil predicted Earth arrival times and Kp | next few days |

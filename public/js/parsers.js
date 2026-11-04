@@ -60,27 +60,43 @@ export function parseKp1m(json) {
     .filter((r) => r.time && r.kp !== null);
 }
 
+/**
+ * The real-time solar wind files (json/rtsw/) list every spacecraft at L1 side
+ * by side, one row per minute each, newest first. `active: true` marks the
+ * spacecraft NOAA is using; mixing in the others would blend different
+ * instruments into one line. Keep the active rows (or, if a file has no
+ * active rows, the first row per minute) and return them oldest first, which
+ * is the order the rest of the app expects.
+ */
+function solarWindRows(json) {
+  const rows = toRows(json);
+  const flagged = rows.some((r) => r.active !== undefined);
+  let keep = flagged ? rows.filter((r) => r.active === true || r.active === 'true') : rows;
+  if (flagged && !keep.length) keep = rows;
+  const seen = new Set();
+  return keep
+    .map((r) => ({ r, time: parseTime(r.time_tag) }))
+    .filter(({ time }) => time && !seen.has(+time) && seen.add(+time))
+    .sort((a, b) => a.time - b.time);
+}
+
 export function parsePlasma(json) {
-  return toRows(json)
-    .map((r) => ({
-      time: parseTime(r.time_tag),
-      density: num(r.density),
-      speed: num(r.speed),
-      temperature: num(r.temperature),
-    }))
-    .filter((r) => r.time);
+  return solarWindRows(json).map(({ r, time }) => ({
+    time,
+    density: num(pick(r, 'density', 'proton_density')),
+    speed: num(pick(r, 'speed', 'proton_speed')),
+    temperature: num(pick(r, 'temperature', 'proton_temperature')),
+  }));
 }
 
 export function parseMag(json) {
-  return toRows(json)
-    .map((r) => ({
-      time: parseTime(r.time_tag),
-      bx: num(pick(r, 'bx_gsm', 'bx')),
-      by: num(pick(r, 'by_gsm', 'by')),
-      bz: num(pick(r, 'bz_gsm', 'bz')),
-      bt: num(r.bt),
-    }))
-    .filter((r) => r.time);
+  return solarWindRows(json).map(({ r, time }) => ({
+    time,
+    bx: num(pick(r, 'bx_gsm', 'bx')),
+    by: num(pick(r, 'by_gsm', 'by')),
+    bz: num(pick(r, 'bz_gsm', 'bz')),
+    bt: num(r.bt),
+  }));
 }
 
 /** GOES long-channel (0.1–0.8 nm) X-ray flux, W/m². */
@@ -186,10 +202,25 @@ export function parse27Day(text) {
   return out;
 }
 
-/** 45-day forecast: "04Nov26 012" tokens, first block Ap, second block F10.7. */
-export function parse45Day(text) {
-  const src = String(text || '');
-  const split = src.search(/F10\.7/i);
+/**
+ * 45-day Ap and F10.7 forecast. Accepts NOAA's JSON
+ * ({data: [{time, metric: 'ap' | 'f107', value}]}) or the text product, where
+ * "04Nov26 012" tokens come in an Ap block, then an F10.7 block. The text
+ * product's title also says "F10.7", so the blocks are split at the
+ * "45-DAY F10.7" heading, not at the first "F10.7".
+ */
+export function parse45Day(input) {
+  if (input && typeof input === 'object' && Array.isArray(input.data)) {
+    const of = (metric) =>
+      input.data
+        .filter((d) => String(d.metric).toLowerCase() === metric && num(d.value) !== null && parseTime(d.time))
+        .map((d) => ({ date: parseTime(d.time), [metric]: num(d.value) }))
+        .sort((a, b) => a.date - b.date);
+    return { ap: of('ap'), f107: of('f107') };
+  }
+  const src = String(input || '');
+  let split = src.search(/45-DAY\s+F10\.7/i);
+  if (split < 0) split = src.search(/^.*F10\.7.*FORECAST\s*$/im);
   const apPart = split >= 0 ? src.slice(0, split) : src;
   const fluxPart = split >= 0 ? src.slice(split) : '';
   const tokens = (part) => {

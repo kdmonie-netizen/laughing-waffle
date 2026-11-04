@@ -118,6 +118,43 @@ export function ap45Text(now, aps, fluxes) {
   return [':Product: 45 Day AP Forecast  45DF.txt', ':Issued: 2026 Nov 03 2105 UTC', '45-DAY AP FORECAST', block(aps), '45-DAY F10.7 CM FLUX FORECAST', block(fluxes), 'FORECASTER: TEST'].join('\n');
 }
 
+/** NOAA's 45-day forecast in its JSON shape. */
+export function ap45JSON(now, aps, fluxes) {
+  const day = (i) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + i)).toISOString().replace('.000', '');
+  const data = [];
+  aps.forEach((ap, i) => {
+    data.push({ time: day(i), metric: 'ap', value: ap });
+    data.push({ time: day(i), metric: 'f107', value: fluxes[i] });
+  });
+  return { type: 'SWPC-Forecast', issued: day(0), product: '45 Day Forecast', units: { ap: 'nT', f107: 'sfu' }, data };
+}
+
+/**
+ * Real-time solar wind in the json/rtsw/ shape: newest first, one row per
+ * minute per spacecraft. The active spacecraft carries the values asked for;
+ * an inactive decoy (ACE) carries absurd ones, so a parser that forgets the
+ * `active` flag shows up at once.
+ */
+export function rtswWind(now, { speed = 400, density = 5 } = {}, minutes = 24 * 60) {
+  const rows = [];
+  for (let m = 0; m <= minutes; m++) {
+    const t = iso(new Date(now.getTime() - m * 60000));
+    rows.push({ time_tag: t, active: true, source: 'SOLAR1', proton_speed: +(speed + 20 * Math.sin(m / 90)).toFixed(2), proton_density: +(density + Math.sin(m / 50)).toFixed(2), proton_temperature: 90000 });
+    rows.push({ time_tag: t, active: false, source: 'ACE', proton_speed: 9999, proton_density: 999, proton_temperature: 1 });
+  }
+  return rows;
+}
+
+export function rtswMag(now, { bz = 1, bt = 5 } = {}, minutes = 24 * 60) {
+  const rows = [];
+  for (let m = 0; m <= minutes; m++) {
+    const t = iso(new Date(now.getTime() - m * 60000));
+    rows.push({ time_tag: t, active: true, source: 'SOLAR1', bt, bx_gsm: 1, by_gsm: 2, bz_gsm: +(bz + Math.sin(m / 30)).toFixed(2) });
+    rows.push({ time_tag: t, active: false, source: 'ACE', bt: 99, bx_gsm: 0, by_gsm: 0, bz_gsm: -99 });
+  }
+  return rows;
+}
+
 export function plasmaArrays(now, { speed = 400, density = 5 } = {}, minutes = 24 * 60) {
   const rows = [['time_tag', 'density', 'speed', 'temperature']];
   for (let m = minutes; m >= 0; m -= 1) {
