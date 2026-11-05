@@ -73,7 +73,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 40px; display: grid
 .errors { background: #3b1414; border: 1px solid #7f1d1d; color: #fecaca; padding: 10px 14px; border-radius: 10px; font-size: 0.88rem; }
 
 /* ---- hero -------------------------------------------------------------- */
-.hero { display: grid; grid-template-columns: minmax(260px, 340px) 1fr; gap: 16px; }
+.hero { display: grid; grid-template-columns: minmax(300px, 460px) 1fr; gap: 16px; }
 @media (max-width: 760px) { .hero { grid-template-columns: 1fr; } }
 .grade-card {
   border-radius: var(--radius); padding: 22px; text-align: center;
@@ -196,7 +196,7 @@ dialog { background: var(--panel); color: var(--text); border: 1px solid var(--b
 dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 .loc-form { display: grid; gap: 12px; }
 .loc-form label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
-.loc-form input { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; }
+.loc-form input, .loc-form select { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px; font: inherit; }
 .loc-form .row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .loc-form menu { display: flex; justify-content: flex-end; gap: 8px; padding: 0; margin: 4px 0 0; }
 
@@ -314,3 +314,29 @@ body.learn-on .day .learn, body.learn-on .hour-detail .learn { font-size: 0.92re
 .nogo { background: color-mix(in srgb, var(--poor) 18%, transparent); border: 1px solid color-mix(in srgb, var(--poor) 55%, transparent); }
 .nogo ul { margin: 4px 0 0; padding-left: 18px; }
 .warn { background: color-mix(in srgb, var(--fair) 16%, transparent); border: 1px solid color-mix(in srgb, var(--fair) 55%, transparent); }
+
+/* 1.4.0: two grades side by side (FDOT network, base + rover). */
+.grade-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px; }
+.grade-col { border-radius: 12px; padding: 10px 8px; background: radial-gradient(circle at 50% 25%, color-mix(in srgb, var(--g, var(--accent)) 28%, transparent), transparent 70%); border: 1px solid color-mix(in srgb, var(--g, var(--border)) 55%, var(--border)); min-width: 0; }
+.grade-col .mode-name { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; min-height: 2.4em; }
+.grade-col .grade { font-size: 4.4rem; margin: 4px 0; }
+.grade-col .verdict { font-size: 0.95rem; }
+.grade-col .nogo { font-size: 0.8rem; }
+.grade-col .window { font-size: 0.82rem; margin-top: 10px; }
+.grade-col .worst .worst-letter { font-size: 1.6rem; }
+@media (max-width: 380px) { .grade-col .grade { font-size: 3.4rem; } }
+.hour.base { height: 30px; font-size: 0.66rem; opacity: 0.85; }
+.hour.base.off { opacity: 0.32; }
+.hd-mode { margin-top: 6px; }
+.capline { color: var(--poor); }
+.day-mode { display: flex; gap: 10px; align-items: center; margin: 6px 0; }
+.day-mode .letter { font-size: 2rem; font-weight: 800; color: var(--g); min-width: 1.2em; text-align: center; }
+#wx .stats { margin-bottom: 10px; }
+
+/* Weather & RTK learning area */
+.table-wrap { overflow-x: auto; }
+#wxlearn table td { font-size: 0.86rem; }
+.wx-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 18px; }
+#wxlearn ul li { margin: 5px 0; }
+.myths li b { color: var(--fair); }
+.quiz-pick select { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; font: inherit; margin-left: 6px; max-width: 100%; }

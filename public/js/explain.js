@@ -98,6 +98,18 @@ export const GLOSSARY = {
     word: 'NOAA',
     text: 'NOAA is the U.S. agency that watches the weather and the oceans. Its Space Weather Prediction Center watches the Sun around the clock. It sends out the forecasts this app uses.',
   },
+  troposphere: {
+    word: 'Troposphere',
+    text: 'The troposphere is the low part of the air, where our weather happens. GPS signals slow down a little as they pass through it. Dry air slows them in a steady way that is easy to fix. Wet air, full of water vapor, slows them in patches that change fast. Using two radio channels does not remove this delay.',
+  },
+  front: {
+    word: 'Front',
+    text: 'A front is the edge between two kinds of air, like cool dry air pushing into warm wet air. The wind turns, and the air gets drier or wetter fast. When a front sits between your base and your rover, the two see different air. Then the errors stop canceling out.',
+  },
+  baseline: {
+    word: 'Baseline',
+    text: 'The baseline is the distance from the base to the rover. On a short baseline, the base and rover look up through almost the same air. So most errors cancel out. The longer the baseline, the more the air can differ, and the more errors creep in.',
+  },
 };
 
 // ------------------------------------------------------------ grade meanings
@@ -193,6 +205,10 @@ export function todayKid(day, now) {
           : `<p><b>No great hours today.</b> The least bad time is around ${t(w.start)}.</p>`,
     );
   }
+  const b = day.modes?.base;
+  if (b && b.grade !== day.grade) {
+    parts.push(`<p>That grade is for the FDOT network. <b>Your own base and rover get ${aGrade(b.grade)}.</b> ${b.score > day.score ? 'A short base looks up through the same air as the rover, so storms and fronts hurt it less.' : 'A long baseline lets the base and rover see different air.'}</p>`);
+  }
   if (now && now.grade !== day.grade) {
     parts.push(`<p><b>Right now</b> it is ${aGrade(now.grade)}. Things can change hour by hour, just like weather.</p>`);
   }
@@ -269,8 +285,10 @@ export function statKid(key, v) {
 
 // --------------------------------------------- what each section is showing
 export const SECTIONS = {
+  wx:
+    `This card is about the weather where you work. Rain by itself does not hurt GPS. Wet air slows the signal a little. That is fine when the base and the rover sit in the same air. Storms and ${term('front', 'fronts')} are the problem. They make the air in one spot different from the air nearby. The network can’t see a storm that is smaller than the gaps between its stations. A short ${term('baseline', 'baseline')} sees almost the same air as the rover, so its grade drops less.`,
   timeline:
-    `Each box is one hour. The letter is the grade for that hour. Green is good and red is bad. Faded boxes are outside your work hours. Tap a box to see why it got that grade.`,
+    `Each box is one hour. The top row is the FDOT network. The bottom row is your own base and rover. The letter is the grade for that hour. Green is good and red is bad. Faded boxes are outside your work hours. Tap a box to see why it got that grade.`,
   outlook:
     `This is like a weather forecast, but for space. The first 3 days come from ${term('noaa', 'NOAA')} and get a real grade. Days farther out are best guesses, so they get a word, like quiet or active, not a letter. The Sun spins once about every 27 days, so busy spots on the Sun come back around. That is how scientists can guess weeks ahead.`,
   kpChart:
@@ -347,7 +365,10 @@ export function hourKid(h) {
 }
 
 export function dayKid(d) {
-  return GRADE_KID[d.grade].split('. ').slice(0, 2).join('. ').replace(/\.?$/, '.');
+  const first = GRADE_KID[d.grade].split('. ').slice(0, 2).join('. ').replace(/\.?$/, '.');
+  const b = d.modes?.base;
+  if (!b || b.grade === d.grade) return first;
+  return `${first} Your own base gets ${aGrade(b.grade)}, because ${b.score > d.score ? 'it sits in the same air as the rover' : 'its long baseline sees different air'}.`;
 }
 
 // --------------------------------------------------------- Space Weather 101

@@ -21,6 +21,13 @@
 // a survey hour at storm level (Kp 5+), Dst at or below -100 nT, an on-site
 // TEC anomaly above 10, and a hole in the Kp forecast during work hours.
 //
+// TWO grades per hour (1.4.0): FDOT network RTK (FPRN) and own base + rover.
+// They share one list of causes, scaled per mode: ionospheric and local-weather
+// causes grow with the base/rover baseline, and are fixed for the network
+// (whose ~40-70 km station spacing can't see storm cells or sea-breeze fronts).
+// Local weather (NWS + SPC) adds thunderstorm chance, front passage and
+// moisture; rain on its own adds nothing (see docs/weather-and-gps.md).
+//
 // The day letter follows the worst work hour whenever that hour is a D or F,
 // so a calm morning can't average away a storm afternoon. Days 4-45 get a
 // trend word (quiet / active / storm possible), never a go letter.
@@ -73,6 +80,48 @@ export const CME_WINDOW = { before: 6, after: 12 };
 export const NO_GO_CAP = 69;
 export const DST_NO_GO = -100;
 export const TEC_NO_GO = 10;
+const D_CAP = NO_GO_CAP;
+const C_CAP = 79;
+const F_CAP = 40;
+
+/**
+ * The two RTK modes. Factors by kind:
+ *   iono  - Kp, Bz, wind speed, the storm-time SED window: differential ionosphere,
+ *           grows with distance to the reference
+ *   wx    - local weather (thunder, fronts, SPC outlook): differential troposphere
+ *   track - flares, scintillation, aurora, protons: hits every receiver alike
+ *   geom  - PDOP: the same sky for both
+ */
+export function modeSettings(settings) {
+  const km = Number.isFinite(+settings.baselineKm) && +settings.baselineKm > 0 ? +settings.baselineKm : 5;
+  const link = settings.link === 'cell' ? 'cell' : 'uhf';
+  const step = (a, b, c, d) => (km <= 5 ? a : km <= 10 ? b : km <= 20 ? c : d);
+  return {
+    network: { key: 'network', label: 'FDOT network (FPRN)', short: 'Network', iono: 1, wx: 1, thunderCap: true, link: 'cell', km: null },
+    base: {
+      key: 'base',
+      label: `Base + rover (${km} km, ${link === 'uhf' ? 'UHF' : 'cell'})`,
+      short: 'Base/rover',
+      iono: step(0.6, 0.8, 1, 1.2),
+      wx: step(0.5, 0.75, 1, 1.25),
+      thunderCap: km > 10,
+      link,
+      km,
+    },
+  };
+}
+
+/** Local-weather penalty tables (points before the profile factor). Engineering judgment; calibrate with check shots. */
+export const WX = {
+  thunder: [[15, 0], [30, 6], [50, 14], [101, 20]], // upper bound (exclusive) → points
+  spc: { 2: 6, 3: 6, 4: 14, 5: 20, 6: 20, 8: 20 },
+  front: 18,
+  humidDewC: 22, // ≈ 72 °F: humid Gulf air makes storm and front gradients sharper
+  humidX: 1.5,
+  thunderCapPct: 50,
+  summerAfternoon: 6, // only when no NWS forecast loaded: May-Oct, 12-19 local
+};
+const thunderPen = (pct) => (pct == null ? 0 : WX.thunder.find(([lim]) => pct < lim)[1]);
 
 /** Days 4-45: a trend, not a go/no-go letter. */
 export function trendFor(kp) {
@@ -99,16 +148,34 @@ function startOfLocalDay(d) {
   return x;
 }
 
-/** Sum factors, scale by profile, apply any no-go caps, return the scored record. */
+/**
+ * Sum factors, scale by profile, apply caps, return the scored record.
+ * caps: strings (hold at D) or {text, max} (hold at that score).
+ */
 function finish(factors, profileFactor, caps = []) {
   const scaled = factors
     .filter((f) => f.penalty > 0.05)
     .map((f) => ({ ...f, penalty: f.penalty * profileFactor }));
   const total = scaled.reduce((s, f) => s + f.penalty, 0);
   let score = Math.max(0, Math.round(100 - total));
-  if (caps.length) score = Math.min(score, NO_GO_CAP);
+  const cs = caps.map((c) => (typeof c === 'string' ? { text: c, max: NO_GO_CAP } : c));
+  for (const c of cs) score = Math.min(score, c.max);
   const g = gradeFor(score);
-  return { score, grade: g.grade, verdict: g.verdict, factors: scaled.sort((a, b) => b.penalty - a.penalty), caps };
+  return { score, grade: g.grade, verdict: g.verdict, factors: scaled.sort((a, b) => b.penalty - a.penalty), caps: cs.map((c) => c.text) };
+}
+
+/** Score one hour for one mode from the shared causes. */
+function scoreMode(m, shared, ctx) {
+  const factors = shared.factors.map((f) => ({ ...f, penalty: f.penalty * (f.kind === 'iono' ? m.iono : f.kind === 'wx' ? m.wx : 1) }));
+  const caps = [...shared.caps];
+  if (m.km != null && m.km > 10) factors.push({ key: 'baseline', kind: 'mode', label: `Baseline ${m.km} km: past ~10 km, fixing gets less reliable`, penalty: 8 });
+  if (m.km != null && m.km > 20) caps.push({ text: `Baseline ${m.km} km is past the usual 10-20 km single-base limit`, max: C_CAP });
+  // Survey storm rule: a short own base shares most of the ionosphere with the rover, so it holds one Kp step longer.
+  const stormKp = ctx.profile.stormKp == null ? null : m.key === 'base' && m.km <= 5 ? ctx.profile.stormKp + 1 : ctx.profile.stormKp;
+  if (stormKp != null && ctx.kp >= stormKp) caps.push(`Kp ${ctx.kp.toFixed(1)} is NOAA storm level (G${Math.min(5, Math.max(1, Math.floor(ctx.kp) - 4))}): no-go for ${ctx.profile.label}`);
+  if (ctx.thunderCap && m.thunderCap) caps.push(ctx.thunderCap);
+  if (ctx.linkAlert && m.link === 'cell') caps.push({ text: `${ctx.linkAlert}: cell and power outages likely, corrections may stop`, max: F_CAP });
+  return finish(factors, ctx.profileFactor, caps);
 }
 
 const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
@@ -130,6 +197,7 @@ const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
  * @param {Array}  p.cmeArrivals   NASA WSA-Enlil predicted Earth arrivals
  * @param {Array}  p.midLatK       NOAA lower-48 K forecast, [{time, k}] per 3-hour UTC slot
  * @param {string} p.cmeCheck      'ok' or 'unavailable' (NASA DONKI failed to load)
+ * @param {object} p.localWeather  buildLocalWeather() from weather.js (NWS + SPC), or null
  * @param {Date}   p.now
  */
 export function gradeConditions({
@@ -143,8 +211,10 @@ export function gradeConditions({
   cmeArrivals = [],
   midLatK = [],
   cmeCheck = 'ok',
+  localWeather = null,
   now = new Date(),
 }) {
+  const modes = modeSettings(settings);
   const { lat, lon } = settings;
   const profile = PROFILES[settings.profile] || PROFILES.survey;
   const profileFactor = profile.factor;
@@ -209,7 +279,8 @@ export function gradeConditions({
     if (!slot) {
       // Inside the forecast's span but no slot: a hole, which is "unknown", never "quiet".
       if (kpSlots.length && t >= firstSlot && t < lastSlotEnd) {
-        hours.push({ time: new Date(t), kp: null, kpKind: 'missing', missing: true, sunlit: solarElevation(mid, lat, lon) > -2, isNow, live, score: null, grade: '?', verdict: 'No Kp forecast for this hour', factors: [], caps: ['No Kp forecast for this hour'] });
+        const miss = { score: null, grade: '?', verdict: 'No Kp forecast for this hour', factors: [], caps: ['No Kp forecast for this hour'] };
+        hours.push({ time: new Date(t), kp: null, kpKind: 'missing', missing: true, sunlit: solarElevation(mid, lat, lon) > -2, isNow, live, ...miss, modes: { network: miss, base: miss } });
       }
       continue;
     }
@@ -230,8 +301,10 @@ export function gradeConditions({
     raise(midKAt(t), 'lower-48 K forecast');
     const cme = cmeAt(t);
     if (cme) raise(cmeKp(cme), `NASA CME ${cme.glancing ? 'glancing blow' : 'arrival'} model`);
-    factors.push({ key: 'kp', label: `Kp ${kp.toFixed(1)} geomagnetic activity${kpFrom ? ` (${kpFrom})` : ''}`, penalty: interp(TABLES.kp, kp) * latF });
-    if (profile.stormKp != null && kp >= profile.stormKp) caps.push(`Kp ${kp.toFixed(1)} is NOAA storm level (G1 or worse): no-go for ${profile.label}`);
+    factors.push({ key: 'kp', kind: 'iono', label: `Kp ${kp.toFixed(1)} geomagnetic activity${kpFrom ? ` (${kpFrom})` : ''}`, penalty: interp(TABLES.kp, kp) * latF });
+    // Storm-time afternoons over the US Southeast: storm-enhanced density plumes, ~17-23 UT.
+    const utcH = new Date(t).getUTCHours();
+    if (kp >= 5 && utcH >= 17 && utcH < 23) factors.push({ key: 'sed', kind: 'iono', label: 'Storm-time afternoon (17-23 UT): ionosphere plumes over the Southeast', penalty: 8 });
 
     const sunEl = solarElevation(mid, lat, lon);
     const sunlit = sunEl > -2;
@@ -240,27 +313,54 @@ export function gradeConditions({
     if (scs.length && sunlit) {
       const flarePen = (sc) => ((sc.rMajorProb || 0) / 100) * 35 + ((sc.rMinorProb || 0) / 100) * 8;
       const sc = scs.reduce((a, b) => (flarePen(b) > flarePen(a) ? b : a));
-      factors.push({ key: 'flare', label: `Flare risk (R1-R2 ${sc.rMinorProb ?? 0}%, R3+ ${sc.rMajorProb ?? 0}%) on sunlit side`, penalty: flarePen(sc) });
+      factors.push({ key: 'flare', kind: 'track', label: `Flare risk (R1-R2 ${sc.rMinorProb ?? 0}%, R3+ ${sc.rMajorProb ?? 0}%) on sunlit side`, penalty: flarePen(sc) });
     }
     const sProb = Math.max(0, ...scs.map((sc) => sc.sProb || 0));
     if (sProb) {
-      factors.push({ key: 'proton', label: `Proton event chance ${sProb}%`, penalty: (sProb / 100) * 10 * polarF });
+      factors.push({ key: 'proton', kind: 'track', label: `Proton event chance ${sProb}%`, penalty: (sProb / 100) * 10 * polarF });
     }
     const lst = localSolarHour(mid, lon);
     if (absM < 25 && (lst >= 19 || lst < 2)) {
-      factors.push({ key: 'scint', label: 'Post-sunset equatorial scintillation window', penalty: 8 * scintF });
+      factors.push({ key: 'scint', kind: 'track', label: 'Post-sunset equatorial scintillation window', penalty: 8 * scintF });
     }
     const geo = pdopInHour(t);
     if (geo) {
       const pen = geo.count < 5 || !Number.isFinite(geo.pdop) ? 50 : interp(TABLES.pdop, geo.pdop);
-      factors.push({ key: 'pdop', label: `PDOP ${Number.isFinite(geo.pdop) ? geo.pdop.toFixed(1) : '∞'} (${geo.count} sats)`, penalty: pen });
+      factors.push({ key: 'pdop', kind: 'geom', label: `PDOP ${Number.isFinite(geo.pdop) ? geo.pdop.toFixed(1) : '∞'} (${geo.count} sats)`, penalty: pen });
     }
     if (live) addLiveFactors(factors, caps, realtime, t, { isNow, sunlit, polarF });
 
-    hours.push({ time: new Date(t), kp, kpKind: kpFrom ? `${slot.kind}, raised by ${kpFrom}` : slot.kind, sunlit, isNow, live, ...finish(factors, profileFactor, caps) });
+    // ---- local weather (lower atmosphere) --------------------------------
+    const wx = localWeather?.ok ? localWeather.at(t) : null;
+    let thunderCap = null;
+    let linkAlert = null;
+    if (wx?.known) {
+      const humid = wx.dewC != null && wx.dewC >= WX.humidDewC ? WX.humidX : 1;
+      const humidNote = humid > 1 ? `, humid air (dewpoint ${Math.round(wx.dewC)} °C) sharpens it` : '';
+      const tp = thunderPen(wx.thunderPct);
+      const sp = wx.spc ? WX.spc[wx.spc.dn] || 0 : 0;
+      if (tp || sp) {
+        const label = tp >= sp ? `Thunderstorm chance ${Math.round(wx.thunderPct)}%: storm cells make wet-delay gradients` : `SPC outlook: ${wx.spc.label}`;
+        factors.push({ key: 'thunder', kind: 'wx', label: label + humidNote, penalty: Math.max(tp, sp) * humid });
+      }
+      if (wx.front) factors.push({ key: 'front', kind: 'wx', label: `Front passing (${wx.front}): reference and rover see different air${humidNote}`, penalty: WX.front * humid });
+      if (wx.thunderPct != null && wx.thunderPct > WX.thunderCapPct) thunderCap = `Thunderstorms likely (${Math.round(wx.thunderPct)}%): cells smaller than the network's station spacing`;
+      else if (wx.spc && wx.spc.dn >= 5) thunderCap = `SPC ${wx.spc.label} for severe storms`;
+      if (wx.linkAlert) linkAlert = wx.linkAlert.event;
+    } else if (!localWeather?.ok) {
+      const lm = new Date(t).getMonth() + 1;
+      const lh = new Date(t).getHours();
+      if (lm >= 5 && lm <= 10 && lh >= 12 && lh < 19) factors.push({ key: 'summer', kind: 'wx', label: 'Summer afternoon: sea-breeze storms likely (no NWS forecast loaded)', penalty: WX.summerAfternoon });
+    }
+
+    const ctx = { kp, profile, profileFactor, thunderCap, linkAlert };
+    const shared = { factors, caps };
+    const net = scoreMode(modes.network, shared, ctx);
+    const base = scoreMode(modes.base, shared, ctx);
+    hours.push({ time: new Date(t), kp, kpKind: kpFrom ? `${slot.kind}, raised by ${kpFrom}` : slot.kind, sunlit, isNow, live, wx, ...net, modes: { network: net, base } });
   }
 
-  // ---- per-day grades over work hours -------------------------------------
+  // ---- per-day grades over work hours, per mode ---------------------------
   const dayMap = new Map();
   for (const h of hours) {
     const key = dayKeyLocal(h.time);
@@ -271,10 +371,11 @@ export function gradeConditions({
     const hr = h.time.getHours();
     return hr >= settings.workStart && hr < settings.workEnd;
   };
-  const days = [];
-  for (const [key, list] of dayMap) {
-    const work = list.filter(inWork);
-    const use = work.length ? work : list;
+  const view = (h, mode) => ({ ...h, ...h.modes[mode] });
+  const gradeDay = (list, mode, m) => {
+    const all = list.map((h) => view(h, mode));
+    const work = all.filter(inWork);
+    const use = work.length ? work : all;
     const known = use.filter((h) => !h.missing);
     const flags = [];
     let score;
@@ -298,26 +399,37 @@ export function gradeConditions({
     const capReasons = [...new Set(use.flatMap((h) => (h.caps || []).filter((c) => !c.includes('NOAA storm level') && !(h.missing && c.startsWith('No Kp forecast')))))];
     if (storm.length) {
       const peak = Math.max(...storm.map((h) => h.kp));
-      capReasons.unshift(`Kp reaches ${peak.toFixed(1)} in work hours, NOAA storm level (G1 or worse): no-go for ${profile.label}`);
+      capReasons.unshift(`Kp reaches ${peak.toFixed(1)} in work hours, NOAA storm level (G1 or worse): no-go for ${profile.label}${mode === 'base' && m.km <= 5 ? ' on a short base' : ''}`);
     }
     const g = gradeFor(score);
-    days.push({
-      key,
-      date: new Date(`${key}T12:00:00`),
+    return {
+      mode,
+      label: m.label,
       score,
       blendScore,
       grade: g.grade,
       verdict: g.verdict,
-      kpMax: list.some((h) => h.kp != null) ? Math.max(...list.filter((h) => h.kp != null).map((h) => h.kp)) : null,
       drivers: topDrivers(use),
-      bestWindow: bestWindow(list, settings),
+      bestWindow: bestWindow(all, settings),
       worstHour,
       flags,
       capReasons,
+    };
+  };
+  const days = [];
+  for (const [key, list] of dayMap) {
+    const net = gradeDay(list, 'network', modes.network);
+    const base = gradeDay(list, 'base', modes.base);
+    days.push({
+      key,
+      date: new Date(`${key}T12:00:00`),
+      ...net,
+      modes: { network: net, base },
+      kpMax: list.some((h) => h.kp != null) ? Math.max(...list.filter((h) => h.kp != null).map((h) => h.kp)) : null,
       warnings: [],
       hours: list,
       confidence: 'High',
-      source: 'NOAA 3-day Kp + R/S probabilities' + (geometry.length ? ' + live GNSS geometry' : ''),
+      source: 'NOAA 3-day Kp + R/S probabilities' + (geometry.length ? ' + live GNSS geometry' : '') + (localWeather?.ok ? ' + NWS local weather' : ''),
     });
   }
 
@@ -346,7 +458,8 @@ export function gradeConditions({
   if (days[0]) days[0].warnings = warnings;
 
   const nowHour = hours.find((h) => h.isNow) || null;
-  return { mlat, latFactor: latF, profileFactor, hours, days, extended, warnings, now: nowHour };
+  if (localWeather && !localWeather.ok) warnings.push('Local weather (NWS) did not load. Summer afternoons get a default storm penalty; nothing else from local weather is in these letters.');
+  return { mlat, latFactor: latF, profileFactor, modes, hours, days, extended, warnings, now: nowHour };
 }
 
 /** Live readings, charged to this hour and the next two (the time L1 wind takes to arrive, plus slack). */
@@ -361,20 +474,20 @@ function addLiveFactors(factors, caps, rt, t, { isNow, sunlit, polarF }) {
   const spUse = sp.length ? Math.max(...sp) : null;
   if (bzUse != null && bzUse < -5) {
     const from = bzArr != null && (rt.bz30 == null || bzArr < rt.bz30) ? 'arriving this hour' : '30-min mean';
-    factors.push({ key: 'bz', label: `IMF Bz ${bzUse.toFixed(1)} nT southward (${from})`, penalty: interp(TABLES.bz, bzUse) });
+    factors.push({ key: 'bz', kind: 'iono', label: `IMF Bz ${bzUse.toFixed(1)} nT southward (${from})`, penalty: interp(TABLES.bz, bzUse) });
   }
   if (spUse != null && spUse > 500) {
-    factors.push({ key: 'speed', label: `Solar wind ${Math.round(spUse)} km/s`, penalty: interp(TABLES.speed, spUse) });
+    factors.push({ key: 'speed', kind: 'iono', label: `Solar wind ${Math.round(spUse)} km/s`, penalty: interp(TABLES.speed, spUse) });
   }
   // A flare's radio burst lasts minutes: this hour only.
   if (isNow && rt.rNow >= 1 && sunlit) {
-    factors.push({ key: 'flareNow', label: `R${rt.rNow} radio blackout in progress`, penalty: rt.rNow >= 3 ? 35 : 8 });
+    factors.push({ key: 'flareNow', kind: 'track', label: `R${rt.rNow} radio blackout in progress`, penalty: rt.rNow >= 3 ? 35 : 8 });
   }
   if (rt.sNow >= 1) {
-    factors.push({ key: 'protonNow', label: `S${rt.sNow} radiation storm in progress`, penalty: 15 * polarF });
+    factors.push({ key: 'protonNow', kind: 'track', label: `S${rt.sNow} radiation storm in progress`, penalty: 15 * polarF });
   }
   if (rt.aurora != null && rt.aurora > 5) {
-    factors.push({ key: 'aurora', label: `Aurora probability ${Math.round(rt.aurora)}% overhead`, penalty: interp(TABLES.aurora, rt.aurora) });
+    factors.push({ key: 'aurora', kind: 'track', label: `Aurora probability ${Math.round(rt.aurora)}% overhead`, penalty: interp(TABLES.aurora, rt.aurora) });
   }
   if (rt.dst != null && rt.dst <= DST_NO_GO) caps.push(`Dst ${Math.round(rt.dst)} nT: a major storm is under way`);
   if (rt.tecAnomaly != null && rt.tecAnomaly > TEC_NO_GO) caps.push(`Ionosphere (TEC) ${rt.tecAnomaly.toFixed(1)} TECU above normal at your site`);

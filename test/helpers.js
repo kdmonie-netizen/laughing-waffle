@@ -172,3 +172,74 @@ export function magArrays(now, { bz = 1, bt = 5 } = {}, minutes = 24 * 60) {
   }
   return rows;
 }
+
+// ---------------------------------------------------------- NWS / SPC (1.4.0)
+const isoHour = (t) => new Date(t).toISOString().replace('.000Z', '+00:00');
+
+/**
+ * An NWS /gridpoints raw response, 7 days from local midnight of `now`.
+ * fns give values per hour (t = ms). Values are merged into longer
+ * validTime durations where they repeat, like the real API does.
+ */
+export function nwsGridpoint(now, { thunder = () => 0, dewC = () => 18, tempC = () => 25, windDir = () => 180, windKmh = () => 10, pressure = null, pop = () => 10, wx = () => [] } = {}) {
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+  const t0 = +start;
+  const layer = (uom, fn) => {
+    if (!fn) return { uom, values: [] };
+    const values = [];
+    let runStart = t0;
+    let runVal = fn(t0);
+    for (let i = 1; i <= 168; i++) {
+      const t = t0 + i * 3600000;
+      const v = i < 168 ? fn(t) : Symbol('end');
+      if (v !== runVal || i === 168) {
+        const hrs = (t - runStart) / 3600000;
+        values.push({ validTime: `${isoHour(runStart)}/${hrs % 24 === 0 ? `P${hrs / 24}D` : hrs > 24 ? `P${Math.floor(hrs / 24)}DT${hrs % 24}H` : `PT${hrs}H`}`, value: runVal });
+        runStart = t;
+        runVal = v;
+      }
+    }
+    return { uom, values };
+  };
+  const wxValues = [];
+  for (let i = 0; i < 168; i++) {
+    const t = t0 + i * 3600000;
+    wxValues.push({ validTime: `${isoHour(t)}/PT1H`, value: wx(t) });
+  }
+  return {
+    properties: {
+      updateTime: new Date(+now - 3600000).toISOString(),
+      temperature: layer('wmoUnit:degC', tempC),
+      dewpoint: layer('wmoUnit:degC', dewC),
+      relativeHumidity: layer('wmoUnit:percent', () => 70),
+      windDirection: layer('wmoUnit:degree_(angle)', windDir),
+      windSpeed: layer('wmoUnit:km_h-1', windKmh),
+      probabilityOfPrecipitation: layer('wmoUnit:percent', pop),
+      probabilityOfThunder: layer('wmoUnit:percent', thunder),
+      quantitativePrecipitation: layer('wmoUnit:mm', () => 0),
+      pressure: layer('wmoUnit:Pa', pressure),
+      weather: { values: wxValues },
+    },
+  };
+}
+
+export const nwsPoints = (lat, lon) => ({
+  properties: { gridId: 'MOB', gridX: 40, gridY: 30, forecastGridData: 'https://api.weather.gov/gridpoints/MOB/40,30', timeZone: 'America/Chicago' },
+});
+
+/** SPC categorical outlook with one square of category `dn` around (lat, lon). */
+export function spcOutlook(now, dn, lat = 30.42, lon = -87.22, { dayOffset = 0 } = {}) {
+  const d = new Date(now);
+  const valid = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + dayOffset, 12));
+  const exp = new Date(+valid + 24 * 3600000);
+  const stamp = (x) => x.toISOString().slice(0, 16).replace(/[-:T]/g, '');
+  const sq = (r) => [[[lon - r, lat - r], [lon + r, lat - r], [lon + r, lat + r], [lon - r, lat + r], [lon - r, lat - r]]];
+  return {
+    type: 'FeatureCollection',
+    features: [
+      { type: 'Feature', geometry: { type: 'Polygon', coordinates: sq(3) }, properties: { DN: 2, VALID: stamp(valid), EXPIRE: stamp(exp), ISSUE: stamp(valid), LABEL: 'TSTM', LABEL2: 'General Thunderstorms Risk' } },
+      ...(dn > 2 ? [{ type: 'Feature', geometry: { type: 'Polygon', coordinates: sq(1) }, properties: { DN: dn, VALID: stamp(valid), EXPIRE: stamp(exp), ISSUE: stamp(valid), LABEL: 'X', LABEL2: 'x' } }] : []),
+    ],
+  };
+}

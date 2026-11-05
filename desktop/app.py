@@ -28,7 +28,7 @@ an app.py whose version differs from release.json always hold the page. No
 release.json (the git dev tree) means no seal.
 """
 
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 
 import hashlib
 import json
@@ -61,6 +61,8 @@ ALLOWED_HOSTS = {
     "navcen.uscg.gov",  # GPS outage file + advisory (no CORS)
     "www.gsc-europa.eu",  # Galileo constellation status (no CORS)
     "services2.arcgis.com",  # NOAA CORS stations (has CORS; proxy is only a fallback)
+    "api.weather.gov",  # NWS forecast grid + alerts for the job site (NWS asks for a User-Agent)
+    "www.spc.noaa.gov",  # SPC convective outlooks
 }
 PROXY_CACHE_S = 120
 HAND_EDIT_LATE_S = 60  # a mismatched file this much newer than release.json may be a hand edit...
@@ -216,7 +218,7 @@ def fetch_upstream(url):
         hit = _proxy_cache.get(url)
         if hit and now - hit[0] < PROXY_CACHE_S:
             return hit[1], hit[2], hit[3], "HIT"
-    req = urllib.request.Request(url, headers={"User-Agent": "kjm-gps-conditions", "Accept-Encoding": "identity"})
+    req = urllib.request.Request(url, headers={"User-Agent": "(KJM GPS Conditions dashboard, office app)", "Accept-Encoding": "identity"})
     try:
         with _urlopen(req, timeout=30) as r:
             body = r.read()

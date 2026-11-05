@@ -62,6 +62,14 @@ export const SOURCES = {
   // --- NOAA NGS CORS network (ArcGIS layer behind the NGS CORS map) --------
   corsLayer: 'https://services2.arcgis.com/C8EMgrsFcRFL6LrL/arcgis/rest/services/NOAA_CORS_Network_view/FeatureServer/2',
 
+  // --- Local weather for the job site (1.4.0) -------------------------------
+  // NWS API: public domain. Browsers can't set its requested User-Agent, so the
+  // page sends plain GETs; the local server/desktop proxy adds one as a fallback.
+  nwsPoints: (lat, lon) => `https://api.weather.gov/points/${lat.toFixed(4)},${lon.toFixed(4)}`,
+  nwsAlerts: (lat, lon) => `https://api.weather.gov/alerts/active?point=${lat.toFixed(4)},${lon.toFixed(4)}`,
+  // SPC convective outlooks (categorical), days 1-3.
+  spcOutlook: [1, 2, 3].map((d) => `https://www.spc.noaa.gov/products/outlook/day${d}otlk_cat.lyr.geojson`),
+
   // --- FAA WAAS (an image; no data feed) ------------------------------------
   waasImage: 'https://www.nstb.tc.faa.gov/incoming/vplbig.png',
 
@@ -84,6 +92,21 @@ export const SOURCES = {
 // Sites that don't publish an open data API. The dashboard links to them as
 // cross-checks and for their own visualisations.
 export const CROSS_CHECK_LINKS = [
+  {
+    name: 'FDOT Florida Permanent Reference Network (FPRN)',
+    url: 'https://www.fdot.gov/geospatial/fprn.shtm',
+    note: 'FDOT’s RTK network: account, mountpoints and station status. Check it before network work, especially after storms.',
+  },
+  {
+    name: 'NWS radar: Eglin (KEVX)',
+    url: 'https://radar.weather.gov/station/KEVX/standard',
+    note: 'Look for storm cells between the job and the nearest reference stations (network) or between base and rover.',
+  },
+  {
+    name: 'SPC convective outlook',
+    url: 'https://www.spc.noaa.gov/products/outlook/',
+    note: 'Where thunderstorms are expected today through day 3. The grade reads this for your site.',
+  },
   {
     name: 'NOAA SWPC GPS Community Dashboard',
     url: 'https://www.swpc.noaa.gov/communities/global-positioning-system-gps-community-dashboard',
@@ -174,6 +197,8 @@ export const DEFAULT_SETTINGS = {
   workEnd: 18,
   elevationMask: 10,   // degrees
   constellations: ['GPS', 'Galileo', 'GLONASS', 'BeiDou'],
+  baselineKm: 5,       // own base to rover, for the base/rover grade
+  link: 'uhf',         // base/rover corrections by 'uhf' radio or 'cell'
 };
 
 // Profiles scale every penalty. RTK/survey work is the most sensitive to

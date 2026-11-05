@@ -142,7 +142,7 @@ function paint(canvas, cfg) {
         const xx = x(+p.time);
         const yy = y(p.value);
         // break the line across data gaps > 15 min
-        if (!started || (last && p.time - last > 15 * 60000)) ctx.moveTo(xx, yy);
+        if (!started || (last && p.time - last > (s.gapMs ?? 15 * 60000))) ctx.moveTo(xx, yy);
         else ctx.lineTo(xx, yy);
         started = true;
         last = p.time;

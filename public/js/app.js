@@ -11,6 +11,9 @@ import { drawAuroraMap, loadLand } from './sims/aurora.js';
 import { dbmArrival, enlilEarthArrivals, cmeAnalyses, CmeAnimation } from './sims/cme.js';
 import * as L from './explain.js';
 import { parseNavcenOA, parseSof, parseGalileoStatus, buildHealth } from './health.js';
+import * as W from './wxlearn.js';
+import { QUIZZES } from './quizzes.js';
+import { parsePoints, parseGridpoint, parseAlerts as parseNwsAlerts, spcAtSite, buildLocalWeather } from './weather.js';
 
 const $ = (id) => document.getElementById(id);
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -74,6 +77,9 @@ const LOADERS = {
   navcenOA: (force) => fetchText(SOURCES.navcenOA, { force, ttl: CACHE_TTL.text, persist: true, proxyFirst: true }),
   navcenSof: (force) => fetchText(SOURCES.navcenSof, { force, ttl: 3 * 3600000, proxyFirst: true }),
   galileoStatus: (force) => fetchText(SOURCES.galileoStatus, { force, ttl: 3600000, proxyFirst: true }),
+  // 1.4.0: local weather. Each answer carries its site, like the CORS list.
+  nws: (force) => loadNws(force),
+  spc: (force) => loadSpc(force),
   // The answer carries the site it was asked for, so a late reply for an old site is never shown for a new one.
   cors: async (force) => {
     const site = { lat: settings.lat, lon: settings.lon };
@@ -94,6 +100,44 @@ async function loadGlotec(force) {
   const url = new URL(last.url, SWPC).href;
   if (glotecFrame.url !== url) glotecFrame = { url, data: await fetchJSON(url, { memo: false, ttl: 0 }) };
   return glotecFrame.data;
+}
+
+// NWS: /points (cached for a month per site) names the forecast grid; the grid
+// (~7 days hourly) refreshes about hourly. Alerts are best effort.
+async function loadNws(force) {
+  const site = { lat: settings.lat, lon: settings.lon };
+  const points = parsePoints(await fetchJSON(SOURCES.nwsPoints(site.lat, site.lon), { ttl: 30 * 86400000, persist: true }));
+  if (!points) throw new Error('NWS has no forecast grid for this site');
+  const grid = await fetchJSON(points.gridUrl, { force, ttl: 30 * 60000, persist: true });
+  let alerts = null;
+  try {
+    alerts = await fetchJSON(SOURCES.nwsAlerts(site.lat, site.lon), { force, ttl: 10 * 60000 });
+  } catch {
+    /* alerts unknown: the grade card says so via state.errors */
+  }
+  return { site, points, grid, alerts };
+}
+
+async function loadSpc(force) {
+  const out = await Promise.all(SOURCES.spcOutlook.map((u) => fetchJSON(u, { force, ttl: 30 * 60000 }).catch(() => null)));
+  if (!out.some(Boolean)) throw new Error('SPC outlooks did not load');
+  return out;
+}
+
+/** Local weather for the grade, only if the answer is for the current site. */
+function localWeatherNow() {
+  const raw = state.raw.nws;
+  const same = raw && Math.abs(raw.site.lat - settings.lat) < 1e-6 && Math.abs(raw.site.lon - settings.lon) < 1e-6;
+  let grid = null;
+  let alerts = [];
+  try {
+    if (same) grid = parseGridpoint(raw.grid);
+    if (same && raw.alerts) alerts = parseNwsAlerts(raw.alerts);
+  } catch (e) {
+    console.warn(e);
+  }
+  const spc = (state.raw.spc || []).map((j) => (j ? spcAtSite(j, settings.lat, settings.lon) : null)).filter(Boolean);
+  return buildLocalWeather({ grid, alerts, spc });
 }
 
 function donkiUrl(base, daysBack) {
@@ -259,6 +303,7 @@ function regrade() {
     cmeArrivals: p.enlil,
     midLatK: midLatSlots(p.daypre),
     cmeCheck: state.errors.donkiEnlil ? 'unavailable' : 'ok',
+    localWeather: (state.localWeather = localWeatherNow()),
   });
 }
 
@@ -279,6 +324,7 @@ function midLatSlots(d) {
 function renderAll() {
   renderErrors();
   renderToday();
+  renderWeather();
   renderHours();
   renderDays();
   renderExtended();
@@ -334,27 +380,12 @@ function gClass(grade) {
   return `g${grade}`;
 }
 
-function renderToday() {
-  const r = state.result;
-  const today = r.days[0];
-  const card = $('gradeCard');
-  card.className = 'grade-card';
-  if (!today) {
-    $('todayGrade').textContent = '?';
-    $('todayVerdict').textContent = 'No Kp forecast available';
-    $('todayWindow').innerHTML = '';
-    $('todayAlerts').innerHTML = (r.warnings || []).map((x) => `<div class="warn">⚠ ${esc(x)}</div>`).join('');
-    $('todayLearn').innerHTML = `<p>${L.todayKid(null)}</p>`;
-    return;
-  }
-  card.classList.add(gClass(today.grade));
-  $('todayGrade').textContent = today.grade;
-  $('todayVerdict').textContent = today.verdict;
-  $('todayScore').textContent = `Score ${today.score}/100 · ${PROFILES[settings.profile].label} · work hours ${settings.workStart}:00–${settings.workEnd}:00`;
+/** One grade column (network or base/rover) on the today card. */
+function gradeColumn(d, m) {
+  const w = d.bestWindow;
+  const wh = d.worstHour;
   // GPS-C1: a D/F work hour is shown as large as the letter, and a good stretch on
   // a mixed day is "usable", never "best window" with a perfect score.
-  const w = today.bestWindow;
-  const wh = today.worstHour;
   const worstLine = wh && wh.score < 70 ? `<div class="worst ${gClass(wh.grade)}">Worst work hour: <b>${fmtHour(wh.time)}</b> <span class="worst-letter">${wh.grade}</span></div>` : '';
   const windowLine = !w
     ? ''
@@ -363,17 +394,37 @@ function renderToday() {
       : w.partial
         ? `Usable stretch: <b>${fmtTime(w.start)} – ${fmtTime(w.end)}</b> (A/B hours). The rest of the work day is worse.`
         : `No A or B hours. Least-bad hour: <b>${fmtTime(w.start)}</b> (${gradeFor(w.score).grade})`;
-  $('todayWindow').innerHTML = worstLine + (windowLine ? `<div>${windowLine}</div>` : '');
-  const notGo = [...today.capReasons, ...today.flags];
-  $('todayAlerts').innerHTML =
-    (notGo.length ? `<div class="nogo"><b>Why this can’t be a go:</b><ul>${notGo.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '') +
-    today.warnings.map((x) => `<div class="warn">⚠ ${esc(x)}</div>`).join('');
+  const notGo = [...d.capReasons, ...d.flags];
+  return `<div class="grade-col ${gClass(d.grade)}" data-mode="${d.mode}">
+      <div class="mode-name">${esc(m.label)}</div>
+      <div class="grade">${d.grade}</div>
+      <div class="verdict">${esc(d.verdict)}</div>
+      <div class="score muted">Score ${d.score}/100</div>
+      ${notGo.length ? `<div class="nogo"><b>Why this can’t be a go:</b><ul>${notGo.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : ''}
+      <div class="window">${worstLine}${windowLine ? `<div>${windowLine}</div>` : ''}</div>
+    </div>`;
+}
+
+function renderToday() {
+  const r = state.result;
+  const today = r.days[0];
+  const card = $('gradeCard');
+  card.className = 'grade-card';
+  if (!today) {
+    $('gradeCols').innerHTML = '<div class="grade-col"><div class="grade">?</div><div class="verdict">No Kp forecast available</div></div>';
+    $('todayAlerts').innerHTML = (r.warnings || []).map((x) => `<div class="warn">⚠ ${esc(x)}</div>`).join('');
+    $('todayLearn').innerHTML = `<p>${L.todayKid(null)}</p>`;
+    return;
+  }
+  $('gradeCols').innerHTML = gradeColumn(today.modes.network, r.modes.network) + gradeColumn(today.modes.base, r.modes.base);
+  $('todayScore').textContent = `${PROFILES[settings.profile].label} · work hours ${settings.workStart}:00–${settings.workEnd}:00 · change the base/rover setup with 📍`;
+  $('todayAlerts').innerHTML = today.warnings.map((x) => `<div class="warn">⚠ ${esc(x)}</div>`).join('');
 
   const now = r.now;
   const pill = $('nowGrade');
   pill.className = `pill ${now ? gClass(now.grade) : ''}`;
   pill.style.color = now ? 'var(--g)' : '';
-  pill.textContent = now ? `${now.grade} · ${now.score}` : '–';
+  pill.textContent = now ? `Network ${now.modes.network.grade} · Base ${now.modes.base.grade}` : '–';
 
   const rt = state.rt;
   const geoNow = nearestGeometry(new Date());
@@ -447,13 +498,19 @@ function renderHours() {
   const hours = state.result.hours;
   const strip = $('hourStrip');
   strip.style.gridTemplateColumns = `repeat(${hours.length}, minmax(14px, 1fr))`;
-  strip.innerHTML = hours
-    .map((h, i) => {
-      const hr = h.time.getHours();
-      const off = hr < settings.workStart || hr >= settings.workEnd;
-      return `<button class="hour ${h.missing ? 'gNA' : gClass(h.grade)} ${off ? 'off' : ''} ${h.isNow ? 'now' : ''}" style="background:var(--g)" data-i="${i}" title="${fmtDay(h.time)} ${fmtHour(h.time)}: ${h.grade} (${h.score})" aria-label="${fmtDay(h.time)} ${fmtHour(h.time)} grade ${h.grade}">${h.grade}</button>`;
-    })
-    .join('') +
+  const row = (mode) =>
+    hours
+      .map((h, i) => {
+        const hr = h.time.getHours();
+        const off = hr < settings.workStart || hr >= settings.workEnd;
+        const g = h.modes[mode];
+        const name = mode === 'network' ? 'FDOT network' : 'Base/rover';
+        return `<button class="hour ${h.missing ? 'gNA' : gClass(g.grade)} ${off ? 'off' : ''} ${h.isNow ? 'now' : ''} ${mode}" style="background:var(--g)" data-i="${i}" title="${fmtDay(h.time)} ${fmtHour(h.time)} · ${name}: ${g.grade} (${g.score ?? '–'})" aria-label="${fmtDay(h.time)} ${fmtHour(h.time)} ${name} grade ${g.grade}">${g.grade}</button>`;
+      })
+      .join('');
+  strip.innerHTML =
+    row('network') +
+    row('base') +
     hours
       .map((h) => {
         const hr = h.time.getHours();
@@ -465,7 +522,7 @@ function renderHours() {
     const b = e.target.closest('.hour');
     if (!b) return;
     state.selectedHour = +b.dataset.i;
-    strip.querySelectorAll('.hour').forEach((x) => x.classList.toggle('sel', x === b));
+    strip.querySelectorAll('.hour').forEach((x) => x.classList.toggle('sel', x.dataset.i === b.dataset.i));
     showHourDetail(hours[state.selectedHour]);
   };
   const initial = hours.find((h) => h.isNow) || hours[0];
@@ -482,21 +539,33 @@ function showHourDetail(h) {
     $('hourDetail').innerHTML = `<b>${fmtDay(h.time)} ${fmtHour(h.time)}</b>: no Kp forecast for this hour. It counts as unknown, not quiet, so the day can’t be a go.`;
     return;
   }
-  const fac = h.factors.filter((f) => f.penalty >= 0.5);
-  $('hourDetail').innerHTML = `<b>${fmtDay(h.time)} ${fmtHour(h.time)}</b>: grade <b>${h.grade}</b> (${h.score}), ${esc(h.verdict)} · Kp ${h.kp.toFixed(2)} (${h.kpKind}) · ${h.sunlit ? 'daylight' : 'night'}<br>` +
-    (fac.length ? fac.map((f) => `${esc(f.label)} <span class="muted">−${f.penalty.toFixed(1)}</span>`).join(' · ') : '<span class="muted">No penalties</span>') +
+  const line = (mode, name) => {
+    const g = h.modes[mode];
+    const fac = g.factors.filter((f) => f.penalty >= 0.5);
+    return `<div class="hd-mode"><b>${name}: ${g.grade}</b> (${g.score}), ${esc(g.verdict)}<br>` +
+      (fac.length ? fac.map((f) => `${esc(f.label)} <span class="muted">−${f.penalty.toFixed(1)}</span>`).join(' · ') : '<span class="muted">No penalties</span>') +
+      (g.caps.length ? `<br><span class="capline">Held down: ${g.caps.map(esc).join(' · ')}</span>` : '') +
+      '</div>';
+  };
+  $('hourDetail').innerHTML = `<b>${fmtDay(h.time)} ${fmtHour(h.time)}</b> · Kp ${h.kp.toFixed(2)} (${h.kpKind}) · ${h.sunlit ? 'daylight' : 'night'}` +
+    line('network', 'FDOT network') + line('base', esc(state.result.modes.base.label)) +
     `<div class="learn">${L.hourKid(h)}</div>`;
 }
 
 function renderDays() {
+  const M = state.result.modes;
   $('dayCards').innerHTML = state.result.days
     .map((d, i) => {
       const cmes = state.parsed.enlil.filter((a) => sameLocalDay(a.arrival, d.date));
-      return `<div class="day ${gClass(d.grade)}">
-        <div class="top"><div><b>${i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : fmtDay(d.date)}</b><div class="muted small">${fmtDay(d.date)}</div></div><div class="letter">${d.grade}</div></div>
-        <div>${esc(d.verdict)} <span class="muted small">(${d.score})</span></div>
-        <div class="small muted">Peak Kp ${d.kpMax != null ? d.kpMax.toFixed(2) : '–'}${d.worstHour && d.worstHour.score < 70 ? ` · worst ${fmtHour(d.worstHour.time)} (${d.worstHour.grade})` : ''}${d.bestWindow && (d.bestWindow.good || d.bestWindow.partial) ? ` · ${d.bestWindow.good ? 'best' : 'usable'} ${fmtHour(d.bestWindow.start)}–${fmtHour(d.bestWindow.end)}` : ''}</div>
-        <ul>${[...d.capReasons, ...d.flags].map((x) => `<li style="color:var(--poor)">${esc(x)}</li>`).join('')}${d.drivers.filter((x) => x.penalty >= 1).map((x) => `<li>${esc(x.label)}</li>`).join('') || (d.capReasons.length || d.flags.length ? '' : '<li>Clean</li>')}
+      const n = d.modes.network;
+      const b = d.modes.base;
+      const modeLine = (x, name) =>
+        `<div class="day-mode ${gClass(x.grade)}"><span class="letter">${x.grade}</span><span><b>${name}</b><br><span class="small">${esc(x.verdict)} (${x.score})${x.worstHour && x.worstHour.score < 70 ? ` · worst ${fmtHour(x.worstHour.time)}` : ''}</span></span></div>`;
+      const reasons = [...new Set([...n.capReasons, ...n.flags].map((x) => `Network: ${x}`).concat([...b.capReasons, ...b.flags].map((x) => `Base/rover: ${x}`)))];
+      return `<div class="day ${gClass(n.grade)}">
+        <div class="top"><div><b>${i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : fmtDay(d.date)}</b><div class="muted small">${fmtDay(d.date)} · peak Kp ${d.kpMax != null ? d.kpMax.toFixed(2) : '–'}</div></div></div>
+        ${modeLine(n, 'FDOT network')}${modeLine(b, `Base/rover ${M.base.km} km`)}
+        <ul>${reasons.map((x) => `<li style="color:var(--poor)">${esc(x)}</li>`).join('')}${n.drivers.filter((x) => x.penalty >= 1).map((x) => `<li>${esc(x.label)}</li>`).join('') || (reasons.length ? '' : '<li>Clean</li>')}
         ${cmes.map((c) => `<li style="color:var(--poor)">CME ${c.glancing ? 'glancing blow' : 'arrival'} ≈ ${fmtTime(c.arrival)} (NASA model)</li>`).join('')}</ul>
         <div class="muted small">${esc(d.source)}</div>
         <div class="learn">${L.dayKid(d)}</div>
@@ -998,6 +1067,64 @@ function corsForSite(raw) {
 }
 
 /** The CORS list depends on the site, so a new location fetches it again. */
+/** Local weather card: what the NWS and SPC say for the site, and how it feeds the two grades. */
+function renderWeather() {
+  const lw = state.localWeather;
+  const box = $('wxStats');
+  if (!box) return;
+  const HOUR = 3600000;
+  const now = Math.floor(Date.now() / HOUR) * HOUR;
+  if (!lw?.ok) {
+    box.innerHTML = `<div class="muted">${state.errors.nws ? `The NWS forecast didn’t load (${esc(state.errors.nws)}).` : 'Loading the NWS forecast…'} Until it does, summer afternoons get a default sea-breeze penalty and nothing else from local weather is in the grades.</div>`;
+    drawChart($('wxChart'), { series: [] });
+    return;
+  }
+  const next = (n) => Array.from({ length: n }, (_, i) => lw.at(now + i * HOUR));
+  const n6 = next(6);
+  const tMax = Math.max(...n6.map((x) => x.thunderPct ?? 0));
+  const cur = n6[0];
+  const frontAt = Array.from({ length: 13 }, (_, i) => ({ t: now + i * HOUR, f: lw.at(now + i * HOUR).front })).find((x) => x.f);
+  const spcNow = cur.spc;
+  const link = lw.alerts.find((a) => /Warning/.test(a.event)) || null;
+  const f = (c) => (c == null ? '–' : `${Math.round((c * 9) / 5 + 32)} °F`);
+  const tiles = [
+    { k: 'Thunderstorm chance (next 6 h)', v: `${Math.round(tMax)}%`, d: cur.thunderFrom ? `NWS ${cur.thunderFrom}` : 'NWS', c: tMax > 50 ? css('--bad') : tMax >= 30 ? css('--poor') : tMax >= 15 ? css('--fair') : css('--good') },
+    { k: 'Dewpoint now', v: f(cur.dewC), d: cur.dewC == null ? 'no data' : cur.dewC >= 22 ? 'humid: storm and front penalties ×1.5' : 'not a multiplier', c: cur.dewC != null && cur.dewC >= 22 ? css('--fair') : css('--good') },
+    { k: 'Front (next 12 h)', v: frontAt ? fmtHour(new Date(frontAt.t)) : 'None seen', d: frontAt ? frontAt.f : 'no sharp dewpoint, pressure or wind change', c: frontAt ? css('--poor') : css('--good') },
+    { k: 'SPC outlook now', v: spcNow ? spcNow.label : '–', d: spcNow ? `until ${fmtTime(spcNow.expire)}` : state.errors.spc ? 'did not load' : 'no outlook for this hour', c: !spcNow ? null : spcNow.dn >= 5 ? css('--bad') : spcNow.dn >= 4 ? css('--poor') : spcNow.dn >= 2 ? css('--fair') : css('--good') },
+    { k: 'NWS warnings', v: link ? link.event : 'None', d: link ? (/(Hurricane|Tropical Storm|Storm Surge|Extreme Wind)/.test(link.event) ? 'cell and power outages likely: network held at F' : 'not used in the grade') : state.errors.nws ? 'unknown' : 'none active for this point', c: link ? css('--poor') : css('--good') },
+    { k: 'Forecast issued', v: lw.updated ? fmtTime(lw.updated) : '–', d: lw.updated ? fmtDay(lw.updated) : '', c: null },
+  ];
+  box.innerHTML = tiles
+    .map((s) => `<div class="stat" style="${s.c ? `--c:${s.c}` : ''}"><div class="k">${esc(s.k)}</div><div class="v">${esc(s.v)}</div><div class="d">${esc(s.d)}</div></div>`)
+    .join('');
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+  const hrs = lw.hours.filter((h) => +h.time >= +start && +h.time < +start + 72 * HOUR);
+  drawChart($('wxChart'), {
+    series: [
+      { label: 'Thunder %', type: 'bar', barWidthMs: HOUR, points: hrs.map((h) => ({ time: h.time, value: h.thunderPct })), colorFn: (pt) => (pt.value > 50 ? css('--bad') : pt.value >= 30 ? css('--poor') : pt.value >= 15 ? css('--fair') : css('--good')) },
+      { label: 'Dewpoint °F', color: css('--accent'), gapMs: 2 * HOUR, points: hrs.map((h) => ({ time: h.time, value: h.dewC == null ? null : (h.dewC * 9) / 5 + 32 })) },
+    ],
+    yMin: 0,
+    yMax: 100,
+    thresholds: [{ value: 50, label: 'thunder 50%', color: css('--bad') }, { value: 72, label: 'dewpoint 72 °F', color: css('--accent') }],
+    now: new Date(),
+  });
+}
+
+/** Load local weather for a new site, then regrade (the old site's forecast is never used). */
+async function refreshWeather() {
+  try {
+    state.raw.nws = await loadNws(false);
+    state.errors.nws = undefined;
+  } catch (e) {
+    state.errors.nws = String(e.message || e);
+  }
+  regrade();
+  renderAll();
+}
+
 async function refreshCors() {
   const asked = { lat: settings.lat, lon: settings.lon };
   let raw = null;
@@ -1089,6 +1216,7 @@ function setupLearn() {
     .join('');
   setupGlossaryDialog();
   setupQuiz();
+  setupWxLearn();
 }
 
 function setupGlossaryDialog() {
@@ -1113,6 +1241,81 @@ function setupGlossaryDialog() {
     void card.offsetWidth; // restart the highlight animation
     card.classList.add('flash');
   });
+}
+
+/** The "Weather & RTK" learning area and the crew quiz picker. */
+function setupWxLearn() {
+  $('wxIntro').textContent = W.WX_INTRO;
+  $('wxLayers').querySelector('tbody').innerHTML = W.WX_LAYERS.map((r) => `<tr>${r.map((c, i) => (i ? `<td>${esc(c)}</td>` : `<td><b>${esc(c)}</b></td>`)).join('')}</tr>`).join('');
+  const list = (id, items) => ($(id).innerHTML = items.map((x) => `<li>${esc(x)}</li>`).join(''));
+  list('wxPoints', W.WX_POINTS);
+  list('wxNetwork', W.WX_NETWORK);
+  list('wxBase', W.WX_BASE);
+  list('wxGrades', W.WX_GRADES);
+  $('wxCompare').querySelector('tbody').innerHTML = W.WX_COMPARE.map((r) => `<tr>${r.map((c, i) => (i ? `<td>${esc(c)}</td>` : `<td><b>${esc(c)}</b></td>`)).join('')}</tr>`).join('');
+  $('wxNumbers').querySelector('tbody').innerHTML = W.WX_NUMBERS.map(([k, v]) => `<tr><td>${esc(k)}</td><td><b>${esc(v)}</b></td></tr>`).join('');
+  $('wxMyths').innerHTML = W.WX_MYTHS.map(([m, t]) => `<li><b>Myth: “${esc(m)}”</b> ${esc(t)}</li>`).join('');
+
+  const sel = $('fqSel');
+  const box = $('fq');
+  if (!QUIZZES.length) {
+    sel.innerHTML = '<option>Quizzes coming soon</option>';
+    sel.disabled = true;
+    return;
+  }
+  sel.innerHTML = QUIZZES.map((q, i) => `<option value="${i}">${i + 1}. ${esc(q.title)}</option>`).join('');
+  let right = 0;
+  let done = 0;
+  let quiz = QUIZZES[0];
+  const score = () => {
+    $('fqScore').innerHTML =
+      done < quiz.questions.length
+        ? `Score: <b>${right}</b> of ${quiz.questions.length}`
+        : `All done! You got <b>${right} of ${quiz.questions.length}</b>.${right === quiz.questions.length ? ' Perfect! 🎉' : ''} <button type="button" class="chip" id="fqReset">Try again</button>`;
+  };
+  const build = () => {
+    quiz = QUIZZES[+sel.value || 0];
+    right = 0;
+    done = 0;
+    $('fqIntro').textContent = quiz.intro || '';
+    box.innerHTML =
+      quiz.questions
+        .map(
+          (q, i) => `<fieldset class="quiz-q" data-i="${i}"><legend>${i + 1}. ${esc(q.q)}</legend>
+          <div class="quiz-choices">${q.choices.map((c, j) => `<button type="button" class="quiz-choice" data-j="${j}">${esc(c)}</button>`).join('')}</div>
+          <p class="quiz-why" hidden></p></fieldset>`,
+        )
+        .join('') + '<div class="quiz-score" id="fqScore" aria-live="polite"></div>';
+    score();
+  };
+  sel.addEventListener('change', build);
+  box.addEventListener('click', (e) => {
+    if (e.target.id === 'fqReset') {
+      build();
+      box.querySelector('.quiz-choice')?.focus();
+      return;
+    }
+    const b = e.target.closest('.quiz-choice');
+    if (!b) return;
+    const fs = b.closest('.quiz-q');
+    if (fs.dataset.done) return;
+    const q = quiz.questions[+fs.dataset.i];
+    const ok = +b.dataset.j === q.answer;
+    fs.dataset.done = ok ? 'right' : 'wrong';
+    done++;
+    if (ok) right++;
+    fs.querySelectorAll('.quiz-choice').forEach((x) => {
+      x.disabled = true;
+      if (+x.dataset.j === q.answer) x.classList.add('right');
+    });
+    if (!ok) b.classList.add('wrong');
+    const why = fs.querySelector('.quiz-why');
+    why.hidden = false;
+    why.className = `quiz-why ${ok ? 'ok' : 'no'}`;
+    why.innerHTML = `<b>${ok ? 'Right!' : `Not quite. The answer is: ${esc(q.choices[q.answer])}.`}</b> ${esc(q.why)}`;
+    score();
+  });
+  build();
 }
 
 function setupQuiz() {
@@ -1189,6 +1392,8 @@ function setupControls() {
     $('locLon').value = settings.lon;
     $('workStart').value = settings.workStart;
     $('workEnd').value = settings.workEnd;
+    $('baselineKm').value = settings.baselineKm ?? 5;
+    $('linkSel').value = settings.link || 'uhf';
     dlg.showModal();
   });
   $('geoBtn').addEventListener('click', () => {
@@ -1217,6 +1422,9 @@ function setupControls() {
     settings.label = $('locName').value || `${lat.toFixed(2)}, ${lon.toFixed(2)}`;
     settings.workStart = Math.max(0, Math.min(23, parseInt($('workStart').value, 10) || 0));
     settings.workEnd = Math.max(settings.workStart + 1, Math.min(24, parseInt($('workEnd').value, 10) || 24));
+    const km = parseFloat($('baselineKm').value);
+    settings.baselineKm = Number.isFinite(km) && km > 0 ? Math.min(100, Math.round(km * 10) / 10) : 5;
+    settings.link = $('linkSel').value === 'cell' ? 'cell' : 'uhf';
     saveSettings();
     $('locLabel').textContent = settings.label;
     computeGeometry();
@@ -1224,6 +1432,7 @@ function setupControls() {
     regrade();
     renderAll();
     refreshCors();
+    refreshWeather();
   });
 
   $('constToggles').addEventListener('change', async (e) => {

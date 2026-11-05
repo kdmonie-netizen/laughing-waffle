@@ -31,6 +31,7 @@
 
   <nav class="tabs" aria-label="Sections">
     <a href="#today">Today</a>
+    <a href="#wx">Local weather</a>
     <a href="#timeline">72-hour</a>
     <a href="#outlook">45-day outlook</a>
     <a href="#live">Live data</a>
@@ -40,6 +41,7 @@
     <a href="#alerts">Alerts</a>
     <a href="#sources">Sources</a>
     <a href="#learn">Learn</a>
+    <a href="#wxlearn">Weather &amp; RTK</a>
     <a href="#method">How it’s graded</a>
   </nav>
 
@@ -49,12 +51,10 @@
     <!-- ===== TODAY ===== -->
     <section id="today" class="hero">
       <div class="grade-card" id="gradeCard">
-        <div class="grade-label">Today’s GPS grade</div>
-        <div class="grade" id="todayGrade">…</div>
-        <div class="verdict" id="todayVerdict">Loading conditions…</div>
-        <div class="score muted" id="todayScore"></div>
+        <div class="grade-label">Today’s GPS grades</div>
+        <div class="grade-cols" id="gradeCols"><div class="grade-col"><div class="grade">…</div><div class="verdict">Loading conditions…</div></div></div>
         <div id="todayAlerts"></div>
-        <div class="window" id="todayWindow"></div>
+        <div class="score muted" id="todayScore"></div>
       </div>
       <div class="now-card">
         <div class="now-head">
@@ -68,11 +68,23 @@
       </div>
     </section>
 
+    <!-- ===== LOCAL WEATHER (1.4.0) ===== -->
+    <section id="wx" class="card">
+      <div class="card-head">
+        <h2>Local weather and your RTK</h2>
+        <span class="muted small">NWS forecast grid + SPC outlook for the job site. Only what changes the GPS math is graded: storm cells, fronts, humid air. Rain by itself is not.</span>
+      </div>
+      <div class="learn" data-topic="wx"></div>
+      <div class="stats" id="wxStats"></div>
+      <canvas class="chart" id="wxChart" aria-label="Thunderstorm chance and dewpoint, next 72 hours"></canvas>
+      <div class="legend"><span class="sw bad"></span>Thunderstorm chance % (bars) <span class="sw" style="background:var(--accent)"></span>Dewpoint °F (line) · <a href="#wxlearn">How weather reaches your fix</a></div>
+    </section>
+
     <!-- ===== 72 h TIMELINE ===== -->
     <section id="timeline" class="card">
       <div class="card-head">
         <h2>Hour-by-hour, next 72 hours</h2>
-        <span class="muted small">Your local time. Shaded = outside work hours. Tap an hour for details.</span>
+        <span class="muted small">Top row: FDOT network · bottom row: base + rover. Your local time. Shaded = outside work hours. Tap an hour for details.</span>
       </div>
       <div class="learn" data-topic="timeline"></div>
       <div class="hours" id="hourStrip"></div>
@@ -458,6 +470,36 @@
     </section>
 
     <!-- ===== METHOD ===== -->
+    <!-- ===== WEATHER & RTK LEARNING AREA (1.4.0) ===== -->
+    <section id="wxlearn" class="card learn-section">
+      <div class="card-head">
+        <h2>🌦️ Weather &amp; RTK</h2>
+        <span class="muted small">How weather and space weather reach a fix, on the FDOT network and on your own base. For field crews.</span>
+      </div>
+      <p id="wxIntro"></p>
+      <h3>Two layers of sky</h3>
+      <div class="table-wrap"><table id="wxLayers"><thead><tr><th>Layer</th><th>Where</th><th>Driven by</th><th>What matters</th></tr></thead><tbody></tbody></table></div>
+      <ul id="wxPoints"></ul>
+      <div class="wx-two">
+        <div><h3>FDOT network (FPRN)</h3><ul id="wxNetwork"></ul></div>
+        <div><h3>Your own base + rover</h3><ul id="wxBase"></ul></div>
+      </div>
+      <h3>Side by side</h3>
+      <div class="table-wrap"><table id="wxCompare"><thead><tr><th>Weather</th><th>FDOT network</th><th>Base + rover</th><th>What to do</th></tr></thead><tbody></tbody></table></div>
+      <h3>How the two grades use weather</h3>
+      <ul id="wxGrades"></ul>
+      <h3>Numbers worth remembering</h3>
+      <div class="table-wrap"><table id="wxNumbers"><tbody></tbody></table></div>
+      <h3>Myths</h3>
+      <ul id="wxMyths" class="myths"></ul>
+      <h3>Crew quizzes</h3>
+      <p class="muted">Ten quizzes of ten questions. Pick one; you see the answer and the reason after each pick.</p>
+      <label class="quiz-pick">Quiz <select id="fqSel"></select></label>
+      <p class="muted" id="fqIntro"></p>
+      <div class="quiz" id="fq"></div>
+      <p class="muted small">Full notes with sources: <code>docs/weather-and-gps.md</code> in the app’s files.</p>
+    </section>
+
     <section id="method" class="card">
       <h2>How the grade works</h2>
       <div class="learn" data-topic="method"></div>
@@ -491,6 +533,10 @@
       <div class="row">
         <label>Work hours from <input id="workStart" type="number" min="0" max="23" /></label>
         <label>to <input id="workEnd" type="number" min="1" max="24" /></label>
+      </div>
+      <div class="row">
+        <label>Base to rover (km) <input id="baselineKm" type="number" min="0.1" max="100" step="0.5" /></label>
+        <label>Base corrections by <select id="linkSel"><option value="uhf">UHF radio</option><option value="cell">Cellular</option></select></label>
       </div>
       <menu>
         <button value="cancel" class="chip">Cancel</button>

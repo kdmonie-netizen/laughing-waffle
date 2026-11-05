@@ -118,6 +118,25 @@ async function serve(route, u) {
   if (u.pathname.includes('WSAEnlil')) return route.fulfill({ json: donkiEnlil });
   if (u.pathname.includes('CMEAnalysis')) return route.fulfill({ json: donkiCme });
   const cors = { 'Access-Control-Allow-Origin': '*' };
+  // 1.4.0 local weather: storm day = afternoon thunderstorms in humid air plus a front; quiet day = nothing.
+  if (u.hostname === 'api.weather.gov') {
+    if (u.pathname.startsWith('/points/')) return route.fulfill({ json: H.nwsPoints(), headers: cors });
+    if (u.pathname.startsWith('/alerts/')) return route.fulfill({ json: { type: 'FeatureCollection', features: [] }, headers: cors });
+    if (u.pathname.startsWith('/gridpoints/')) {
+      const hr = (t) => new Date(t).getHours();
+      const front = (() => { const d = new Date(now); d.setHours(16, 0, 0, 0); return +d; })();
+      return route.fulfill({
+        json: storm
+          ? H.nwsGridpoint(now, { thunder: (t) => (hr(t) >= 13 && hr(t) < 18 ? 60 : 10), dewC: (t) => (t >= front && t < front + 6 * 3600000 ? 16 : 23) })
+          : H.nwsGridpoint(now, { thunder: () => 0, dewC: () => 15 }),
+        headers: cors,
+      });
+    }
+  }
+  if (u.hostname === 'www.spc.noaa.gov') {
+    const day = +(/day(\d)otlk/.exec(u.pathname)?.[1] || 1);
+    return route.fulfill({ json: storm ? H.spcOutlook(now, 4, 30.42, -87.22, { dayOffset: day - 1 }) : H.spcOutlook(now, 2, 45, -100, { dayOffset: day - 1 }), headers: cors });
+  }
   if (u.pathname.includes('d-rap')) return route.fulfill({ status: 404, body: 'gone' }); // exercises the image-failure path
   if (routes[file]) return route.fulfill({ json: routes[file], headers: cors });
   if (texts[file]) return route.fulfill({ body: texts[file], contentType: file === 'constellation-information' ? 'text/html' : 'text/plain', headers: cors });
@@ -171,7 +190,7 @@ check(L1.visible >= 30, `explanation boxes visible (${L1.visible})`);
 check(!L1.emptyTopics.length, `every section box has text (${L1.emptyTopics.join(',') || 'none empty'})`);
 check(/^Today gets an? [A-F]\./.test(L1.today), `today box: "${L1.today}"`);
 check(L1.statLines === 11 && L1.dayLines >= 3 && L1.hourLine.length > 10, `tile/day/hour lines (${L1.statLines}/${L1.dayLines}, "${L1.hourLine}")`);
-check(L1.story === 5 && L1.gloss === 22 && L1.quiz === 6, `Space Weather 101: ${L1.story} steps, ${L1.gloss} words, ${L1.quiz} questions`);
+check(L1.story === 5 && L1.gloss === 25 && L1.quiz === 6, `Space Weather 101: ${L1.story} steps, ${L1.gloss} words, ${L1.quiz} questions`);
 await page.evaluate(() => scrollTo(0, 0));
 await page.screenshot({ path: `shot-${scenario}-learn-on-full.png`, fullPage: true });
 await page.locator('#learn').screenshot({ path: `shot-${scenario}-learn-section.png` });

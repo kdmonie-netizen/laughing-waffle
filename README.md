@@ -40,6 +40,10 @@ The new readings (TEC, Dst, model Kp, mid-latitude odds, CORS, WAAS) are shown, 
 
 ## How the grade works
 
+**Two grades, every hour and every day (1.4.0):** one for **FDOT network RTK (FPRN)** and one for **your own base + rover** (set the baseline length and UHF or cellular with 📍; default 5 km, UHF). Both are about the GPS math only: signal delay, the corrections link and fixing. Crew safety is not graded.
+
+**Local weather (1.4.0)** comes from the NWS forecast grid and alerts for the job site and the SPC thunderstorm outlooks. Rain and humidity on their own don't hurt RTK; uneven air does. So the grade reads thunderstorm chance and the SPC category (storm cells), fronts (fast dewpoint, pressure or wind changes) and humid air (as a multiplier). The network takes these fully, because storm cells and sea-breeze fronts are smaller than its station spacing; a short own base shares the rover's air and takes much less. A hurricane or tropical storm warning holds the network at F (cell and power outages); a base on UHF is not held down by it. The full rules are in [`docs/app-grading-rules.md`](docs/app-grading-rules.md), and the research behind them, with sources, is in [`docs/weather-and-gps.md`](docs/weather-and-gps.md).
+
 Each hour starts at 100 and loses points for Kp, flare odds (sunlit side only), proton odds (high latitude), the post-sunset equatorial scintillation window, real-time southward Bz and fast wind, aurora overhead, and poor PDOP. Penalties scale with your **geomagnetic latitude** and your **work profile** (RTK/survey, drone, ag guidance, general nav). The day grade blends the average and the worst hour of your work hours (60/40), but if any work hour is a D or an F the day takes that grade, so a calm morning can't average away a storm afternoon.
 
 The Kp for each hour is the worst of NOAA's 3-day forecast, the live 1-minute estimate (this hour and the next two, since L1 is about an hour upstream), NOAA's Geospace model, NOAA's lower-48 (mid-latitude) K, and any NASA-modelled CME arrival (6 hours before to 12 hours after). Some readings rule out a go outright (the grade stops at D): a survey hour at Kp 5 or more, Dst at or below −100 nT, a TEC anomaly above 10 at the site, or a hole in the Kp forecast during work hours. The grade card says which one did it, and warns when the NASA CME check didn't load.
@@ -53,6 +57,10 @@ Days 1–3 get a letter from NOAA's full 3-day forecast (high confidence). Days 
 The app opens on **Pensacola, FL**; change the site with the 📍 button. A failed NOAA feed may be stood in for by a saved copy only while it is young (an hour for live feeds, up to a day for slow ones), and the red banner names any feed shown from a saved copy. All thresholds are lookup tables in [`public/js/grading.js`](public/js/grading.js), so they're easy to tune. The page has a full "How it's graded" table.
 
 > This is a planning aid. Always confirm with your receiver's own fix status, residuals and check shots.
+
+## Weather & RTK learning area and crew quizzes
+
+A **Weather & RTK** section explains, at field-crew level, how weather and space weather reach a fix on the FDOT network and on an own base, with a side-by-side table, numbers worth remembering and common myths. It ends with **10 crew quizzes of 10 questions** (`public/js/quizzes.js`; also printable from [`docs/field-quizzes.md`](docs/field-quizzes.md)). Every question was written from the fact-checked knowledge base and checked by two independent reviewers.
 
 ## Learn mode
 

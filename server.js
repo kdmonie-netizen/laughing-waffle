@@ -25,6 +25,8 @@ const ALLOWED_HOSTS = new Set([
   'navcen.uscg.gov',
   'www.gsc-europa.eu',
   'services2.arcgis.com',
+  'api.weather.gov',
+  'www.spc.noaa.gov',
 ]);
 
 const TYPES = {
@@ -64,7 +66,7 @@ async function proxy(req, res, target) {
   }
   try {
     // redirect: 'error' - never follow a redirect off the allow-list.
-    const r = await fetch(url, { headers: { 'user-agent': 'gps-conditions-dashboard' }, redirect: 'error', signal: AbortSignal.timeout(30000) });
+    const r = await fetch(url, { headers: { 'user-agent': '(KJM GPS Conditions dashboard, office app)' }, redirect: 'error', signal: AbortSignal.timeout(30000) });
     const body = Buffer.from(await r.arrayBuffer());
     const type = r.headers.get('content-type') || 'application/octet-stream';
     if (r.ok) cache.set(url.href, { t: Date.now(), status: r.status, type, body });
