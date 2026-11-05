@@ -104,8 +104,8 @@ export const GLOSSARY = {
 export const GRADE_KID = {
   A: 'Super day for GPS! Signals come through clean. Your receiver should lock on fast and stay locked. It is like a calm, sunny day with no wind.',
   B: 'Good day for GPS. There are small bumps in space, but your GPS should work fine. It is like a sunny day with a light breeze.',
-  C: 'Okay day. GPS will work, but it might be a little shaky. Check your work twice. It is like a cloudy day. You can still go out, just keep an eye on the sky.',
-  D: 'Rough day. Your GPS may take a long time to lock on. It might jump around, too. It is like a windy, rainy day. You can work, but it will be slower and harder.',
+  C: 'Okay day. GPS should work, but it might be a little shaky. Check your work twice. It is like a cloudy day. Keep an eye on the sky.',
+  D: 'Rough day. Your GPS may take a long time to lock on, or not lock at all. It might jump around, too. Careful work should wait if it can. It is like a windy, rainy day.',
   F: 'Stormy day in space! Exact GPS work could fail. If you can, save the careful jobs for a better day. It is like a thunderstorm. Most people would wait it out.',
 };
 
@@ -118,11 +118,14 @@ export function factorKid(f) {
   };
   switch (f.key) {
     case 'kp': {
-      const kp = n(/Kp[^\d]*([\d.]+)/);
+      // GPS-M2: show one decimal and pick the words from that same number,
+      // so Kp 4.7 is never printed as a storm-level "Kp 5".
+      const raw = n(/Kp[^\d]*([\d.]+)/);
+      const kp = raw == null ? null : Math.round(raw * 10) / 10;
       if (kp == null || kp < 3) return `Earth’s ${term('magfield', 'magnetic field')} is calm.`;
-      if (kp < 5) return `Earth’s ${term('magfield', 'magnetic field')} is a little shaky (${term('kp', 'Kp')} ${kp.toFixed(0)}). The high air gets bumpy, so signals wobble a bit.`;
-      if (kp < 7) return `There is a space storm (${term('kp', 'Kp')} ${kp.toFixed(0)}). Earth’s ${term('magfield', 'magnetic field')} is being shaken. That stirs up the ${term('ionosphere', 'high air')}, and GPS signals bend on the way down.`;
-      return `There is a big space storm (${term('kp', 'Kp')} ${kp.toFixed(0)}). The ${term('ionosphere', 'high air')} is very stirred up. Exact GPS can stop working for a while.`;
+      if (kp < 5) return `Earth’s ${term('magfield', 'magnetic field')} is a little shaky (${term('kp', 'Kp')} ${kp.toFixed(1)}). The high air gets bumpy, so signals wobble a bit.`;
+      if (kp < 7) return `There is a space storm (${term('kp', 'Kp')} ${kp.toFixed(1)}). Earth’s ${term('magfield', 'magnetic field')} is being shaken. That stirs up the ${term('ionosphere', 'high air')}, and GPS signals bend on the way down.`;
+      return `There is a big space storm (${term('kp', 'Kp')} ${kp.toFixed(1)}). The ${term('ionosphere', 'high air')} is very stirred up. Exact GPS can stop working for a while.`;
     }
     case 'flare':
       return `The Sun might send out a ${term('flare', 'flare')} today. A big one can make radio noise that drowns out GPS for a few minutes. This only matters in the daytime, when your side of Earth faces the Sun.`;
@@ -174,13 +177,20 @@ export function todayKid(day, now) {
   } else {
     parts.push('<p><b>Why?</b> Space is calm, and lots of satellites are spread around your sky. Nothing is getting in the way.</p>');
   }
+  if (day.capReasons?.length || day.flags?.length) {
+    parts.push(
+      `<p><b>Why not a go?</b> ${day.flags?.length ? 'Part of the forecast is missing. We never guess that missing hours are calm. ' : ''}${day.capReasons?.length ? 'Some readings say a storm is here or close. Then the grade stops at D, even if other hours look calm.' : ''}</p>`,
+    );
+  }
   const w = day.bestWindow;
   if (w) {
     const t = (d) => d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
     parts.push(
       w.good
         ? `<p><b>Best time to work:</b> ${t(w.start)} to ${t(w.end)}.</p>`
-        : `<p><b>No great hours today.</b> The least bad time is around ${t(w.start)}.</p>`,
+        : w.partial
+          ? `<p><b>Good hours:</b> ${t(w.start)} to ${t(w.end)}. The rest of the work day is rougher, so the day gets the lower grade.</p>`
+          : `<p><b>No great hours today.</b> The least bad time is around ${t(w.start)}.</p>`,
     );
   }
   if (now && now.grade !== day.grade) {
@@ -217,7 +227,7 @@ export function statKid(key, v) {
       return v < 10 ? 'Normal. No proton storm.' : 'Proton storm! Mostly a problem near the poles.';
     case 'aurora':
       if (v == null) return 'No reading right now.';
-      if (v < 5) return 'No aurora over you. Good for GPS.';
+      if (v < 5) return 'No aurora over you.';
       if (v < 30) return 'Some of the northern lights may be over you. Signals may twinkle.';
       return 'The northern lights are likely right over you. Your signals will twinkle.';
     case 'sats':
@@ -248,9 +258,9 @@ export function statKid(key, v) {
       return 'The model says a storm is coming in the next hour.';
     case 'mlat': {
       const a = Math.abs(v);
-      if (a >= 60) return 'You are close to the magnetic pole. Storms hit you hard.';
-      if (a >= 40) return 'You are in the middle. Big storms reach you.';
-      return 'You are far from the magnetic pole. Watch for evening twinkle instead.';
+      if (a >= 55) return 'You are close to the magnetic pole. Storms hit you hard.';
+      if (a >= 25) return 'You are in the middle. Big storms still reach you.';
+      return 'You are near the magnetic equator. Watch for twinkly signals after sunset.';
     }
     default:
       return '';
@@ -262,7 +272,7 @@ export const SECTIONS = {
   timeline:
     `Each box is one hour. The letter is the grade for that hour. Green is good and red is bad. Faded boxes are outside your work hours. Tap a box to see why it got that grade.`,
   outlook:
-    `This is like a weather forecast, but for space. The first 3 days come from ${term('noaa', 'NOAA')} and are the most trustworthy. Days farther out are best guesses. The Sun spins once about every 27 days, so busy spots on the Sun come back around. That is how scientists can guess weeks ahead.`,
+    `This is like a weather forecast, but for space. The first 3 days come from ${term('noaa', 'NOAA')} and get a real grade. Days farther out are best guesses, so they get a word, like quiet or active, not a letter. The Sun spins once about every 27 days, so busy spots on the Sun come back around. That is how scientists can guess weeks ahead.`,
   kpChart:
     `Each bar shows how shaky Earth’s ${term('magfield', 'magnetic field')} was over 3 hours. Taller bars mean more shaking. Green is calm, yellow is bumpy, orange and red are storms. Faded bars on the right are the forecast. Watch for bars that reach the dashed line at 5. That is where storms start.`,
   magChart:
@@ -310,7 +320,7 @@ export const SECTIONS = {
   sources:
     'These links go to other space weather websites. You can use them to double-check this app. The dots at the bottom show which data came in. Green means it worked. Red means that data could not be reached.',
   method:
-    `This is the recipe for the grade. Every hour starts with 100 points, like a perfect test score. Each problem in space takes some points away. More points left means a better grade. People close to the ${term('maglat', 'magnetic pole')} lose more points, because storms hit them harder.`,
+    `This is the recipe for the grade. Every hour starts with 100 points, like a perfect test score. Each problem in space takes some points away. More points left means a better grade. One bad hour can pull down the whole day. People close to the ${term('maglat', 'magnetic pole')} lose more points, because storms hit them harder.`,
 };
 
 // ------------------------------------------------- Space Weather 101 extras

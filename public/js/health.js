@@ -220,6 +220,9 @@ export function buildHealth({ oa = null, sof = null, galileo = null } = {}, now 
   }
   for (const g of galBad.values()) excludedNow.push({ constellation: 'Galileo', id: `${g.svid} (${g.name})`, why: g.status.toLowerCase(), since: null, until: null, nanu: g.nagu, source: 'GSC' });
   scheduled.sort((a, b) => a.since - b.since);
+  // GPS-M5: say plainly which systems were never checked. There is no open
+  // GLONASS or BeiDou health feed, so all of their satellites stay in PDOP.
+  notes.push({ constellation: 'GLONASS and BeiDou', id: '', why: 'health was not checked. Every one of those satellites is counted', since: null, until: null, nanu: null, unchecked: true });
   const key = [oa ? 'oa' : '-', sof ? 'sof' : '-', galileo ? 'gal' : '-', ...windows.map((w) => `${w.prn}:${+w.start}:${w.end ? +w.end : ''}`), ...galBad.keys()].join('|');
   return { usable, known: { GPS: !!(oa || sof), GPSconfirmed: !!sof, Galileo: !!galileo }, excludedNow, scheduled, notes, key };
 }

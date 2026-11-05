@@ -166,9 +166,9 @@ export const CACHE_TTL = {
 };
 
 export const DEFAULT_SETTINGS = {
-  lat: 39.74,         // Denver, CO. Replaced by "Use my location" or manual entry.
-  lon: -104.99,
-  label: 'Denver, CO',
+  lat: 30.42,         // Pensacola, FL (the office). Replaced by "Use my location" or manual entry.
+  lon: -87.22,
+  label: 'Pensacola, FL',
   profile: 'survey',
   workStart: 6,        // local hours used for the day's headline grade
   workEnd: 18,
@@ -178,8 +178,10 @@ export const DEFAULT_SETTINGS = {
 
 // Profiles scale every penalty. RTK/survey work is the most sensitive to
 // ionospheric disturbance; plain navigation shrugs most of it off.
+// stormKp: an hour at or above this Kp can't be graded better than D for the
+// profile, whatever the latitude (NOAA G1 starts at Kp 5).
 export const PROFILES = {
-  survey: { label: 'RTK / Survey (cm-level)', factor: 1.25 },
+  survey: { label: 'RTK / Survey (cm-level)', factor: 1.25, stormKp: 5 },
   drone: { label: 'Drone / UAV mapping', factor: 1.0 },
   ag: { label: 'Precision ag / machine guidance', factor: 0.9 },
   nav: { label: 'General navigation (m-level)', factor: 0.5 },

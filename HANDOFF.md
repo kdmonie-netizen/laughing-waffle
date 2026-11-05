@@ -4,6 +4,8 @@
 **Branch:** `claude/gps-conditions-dashboard-c7d20v` (keep working here and push here)
 **Status (4 Nov 2026):** the dashboard and Learn mode are both done and pushed. Steps 1–8 in section 5 are finished; see "What was done" there for the choices made.
 
+**Update (5 Nov 2026, version 1.3.0):** all 18 findings of the outside audit (`KJM_GPS_Conditions_AUDIT_2026-11-05.md`) were approved and fixed; see its fix log and section 10 below.
+
 Read `README.md` first for what the app does and how the grade works. This file only covers what a new session needs to continue.
 
 ---
@@ -33,7 +35,7 @@ server.js                    static server + allow-listed /api/proxy (no deps)
 public/index.html            the whole page (sections: today, timeline, outlook, live, sats, sims, alerts, sources, method)
 public/css/styles.css        dark theme; grade colours via .gA–.gF setting --g
 public/js/app.js             loads feeds, calls grading, renders every section
-public/js/config.js          every URL, cache times, default location (Denver), work profiles
+public/js/config.js          every URL, cache times, default location (Pensacola), work profiles
 public/js/fetch.js           fetch + cache + proxy fallback
 public/js/parsers.js         SWPC JSON (both shapes) and text-product parsers
 public/js/grading.js         the grading model (hours → days → 27/45-day outlook)
@@ -158,3 +160,11 @@ A research agent audited every free source it could find; each one used here was
 - **Review, 4 Nov 2026:** an independent 28-agent review (5 areas, every finding checked by a skeptic) confirmed 20 findings, all fixed in 1.2.0, the worst being a hole in the release seal (next release's files arriving before its release.json passed as hand edits). Left open (verdict "uncertain"): LAUNCH notices are ignored, so a newly launched GPS satellite in checkout would count in PDOP until USABINIT. CelesTrak's gps-ops group may not even list it then; not worth guessing.
 - **Still open:** NASA DONKI answers 429 on the shared `DEMO_KEY`. A free personal key from https://api.nasa.gov goes in `nasaApiKey` (config.js). That sign-up is the owner's.
 - **Not used, and why:** gpsjam.org (a day behind, needs H3 hex maths; linked instead), GFZ Hp30 (no CORS; Kp already covers it), NAVCEN Yuma almanac health (shows every PRN healthy, even during outages), FAA NOTAM API (needs a key), BoM / ESA (need accounts), US-TEC and CTIPe (retired).
+
+## 10. Audit fixes in 1.3.0 (5 Nov 2026)
+
+The outside audit found that the common bad days (a few storm hours, a storm just starting, a CME on the way, a dead feed) could still say "go". All 18 findings were approved and fixed. The fix log at the bottom of `KJM_GPS_Conditions_AUDIT_2026-11-05.md` says what changed for each ID.
+
+- `test/audit-fixes.test.js` reproduces every audit scenario (Pensacola, RTK, Central time) and is part of `npm test`.
+- The audit's own `audit_tests/` folder lives on the office PC, not in this repo. Run it there after pulling: `TZ=America/Chicago node --test audit_tests/*.test.js`. Its API guesses may differ from the names used here (`cmeCheck`, `midLatK`, `realtime.dst`, `realtime.tecAnomaly`, `realtime.kpModel`, `realtime.propagated`); if one fails only on a name, align the test, not the grade.
+- Ship from the office PC as usual: `python -B desktop/package_to_dropbox.py` (dry run), then `--go`.

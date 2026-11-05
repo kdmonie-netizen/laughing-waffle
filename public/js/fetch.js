@@ -7,6 +7,20 @@ import { CACHE_TTL } from './config.js';
 const memory = new Map();
 let proxyAvailable = null; // unknown until first probe
 
+// GPS-H5: when a feed fails, a saved copy may stand in, but only while it is
+// young enough to still describe today. Past this age the feed counts as
+// missing, so the page says so instead of showing yesterday's quiet Sun.
+const HOUR = 3600000;
+export function staleLimit(ttl) {
+  return Math.min(24 * HOUR, Math.max(HOUR, ttl * 12));
+}
+
+// url → age (ms) of every saved copy served in place of a failed fetch.
+const staleServed = new Map();
+export function staleFeeds() {
+  return [...staleServed].map(([url, age]) => ({ url, age }));
+}
+
 async function probeProxy() {
   if (proxyAvailable !== null) return proxyAvailable;
   try {
@@ -80,9 +94,13 @@ export async function fetchText(url, { ttl = CACHE_TTL.default, persist = false,
       // A stale copy is better than nothing, but not for ever: past a day it
       // is treated as not loaded (for the health lists that means "unknown").
       const stale = (memo && memory.get(url)) || storageGet(key);
-      if (stale && now - stale.t < Math.max(ttl * 2, 86400000)) return stale.body;
+      if (stale && now - stale.t < Math.max(ttl * 2, 86400000)) {
+        staleServed.set(url, now - stale.t);
+        return stale.body;
+      }
       throw e;
     }
+    staleServed.delete(url);
     const entry = { t: now, body };
     if (memo) memory.set(url, entry);
     if (persist) storageSet(key, entry);
@@ -106,12 +124,16 @@ export async function fetchText(url, { ttl = CACHE_TTL.default, persist = false,
     } else if (await probeProxy()) {
       body = await viaProxy();
     } else {
-      // Fall back to a stale cached copy rather than nothing.
+      // Fall back to a saved copy, but only a young one (see staleLimit).
       const stale = memory.get(url) || storageGet(key);
-      if (stale) return stale.body;
+      if (stale && now - stale.t < staleLimit(ttl)) {
+        staleServed.set(url, now - stale.t);
+        return stale.body;
+      }
       throw directErr;
     }
   }
+  staleServed.delete(url);
   const entry = { t: now, body };
   if (memo) memory.set(url, entry);
   if (persist) storageSet(key, entry);

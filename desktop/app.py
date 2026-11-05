@@ -28,7 +28,7 @@ an app.py whose version differs from release.json always hold the page. No
 release.json (the git dev tree) means no seal.
 """
 
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.3.0"
 
 import hashlib
 import json

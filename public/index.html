@@ -53,6 +53,7 @@
         <div class="grade" id="todayGrade">…</div>
         <div class="verdict" id="todayVerdict">Loading conditions…</div>
         <div class="score muted" id="todayScore"></div>
+        <div id="todayAlerts"></div>
         <div class="window" id="todayWindow"></div>
       </div>
       <div class="now-card">
@@ -82,7 +83,7 @@
     <section id="outlook" class="card">
       <div class="card-head">
         <h2>Outlook: as far out as NOAA forecasts</h2>
-        <span class="muted small">Days 1–3: NOAA 3-day Kp + flare/proton odds (high confidence) · to day 27: 27-day outlook (medium) · to day 45: 45-day Ap (low)</span>
+        <span class="muted small">Days 1–3: graded from NOAA’s 3-day forecast (high confidence) · days 4–45: a trend, not a go/no-go (27-day outlook, medium; 45-day Ap, low). Book crews from the 3-day grade.</span>
       </div>
       <div class="learn" data-topic="outlook"></div>
       <div class="days" id="dayCards"></div>
@@ -460,20 +461,21 @@
     <section id="method" class="card">
       <h2>How the grade works</h2>
       <div class="learn" data-topic="method"></div>
-      <p>Every hour starts at 100. Points come off for each thing known to degrade GNSS positioning. Penalties scale with your <b>geomagnetic latitude</b> (<span id="mlatNote"></span>) and your <b>work profile</b>. The day grade blends the average and the worst hour inside your work hours (60/40), so one bad afternoon still shows.</p>
+      <p>Every hour starts at 100. Points come off for each thing known to degrade GNSS positioning. Penalties scale with your <b>geomagnetic latitude</b> (<span id="mlatNote"></span>) and your <b>work profile</b>. The day grade blends the average and the worst hour inside your work hours (60/40). If any work hour is a D or an F, the day takes that hour’s grade: a calm morning can’t average away a storm afternoon.</p>
+      <p>The Kp for each hour is the worst of NOAA’s 3-day forecast, the live 1-minute estimate (this hour and the next two), NOAA’s Geospace model, NOAA’s lower-48 (mid-latitude) K, and a NASA-modelled CME arrival (6 hours before to 12 hours after it). Some readings don’t take off points, they rule out a go (the grade stops at D): a survey hour at Kp 5 or more, Dst at or below −100 nT, a TEC anomaly above 10 at your site, or a hole in the Kp forecast during work hours.</p>
       <table class="method">
         <thead><tr><th>Factor</th><th>Why it matters for GPS</th><th>Penalty (before scaling)</th></tr></thead>
         <tbody>
-          <tr><td>Kp</td><td>Storms create steep ionospheric (TEC) gradients and scintillation. RTK ambiguities fail to fix or drop.</td><td>Kp 3: −4 · 4: −12 · 5: −30 · 6: −50 · 7: −70 · 8: −85</td></tr>
+          <tr><td>Kp</td><td>Storms create steep ionospheric (TEC) gradients and scintillation. RTK ambiguities fail to fix or drop.</td><td>Kp 3: −4 · 4: −12 · 5: −30 · 6: −50 · 7: −70 · 8: −85. RTK / Survey: Kp 5 or more is never better than D.</td></tr>
           <tr><td>Flare odds (R scale)</td><td>Big flares bring solar radio bursts and sudden TEC jumps. Sunlit side only.</td><td>up to −35 × P(R3+) − 8 × P(R1–R2)</td></tr>
           <tr><td>Proton odds (S scale)</td><td>Polar-cap absorption and degraded tracking at high latitude.</td><td>up to −10 × P(S1+), ×0.2 below 60° magnetic</td></tr>
           <tr><td>Equatorial scintillation</td><td>Plasma bubbles after local sunset within ±25° of the magnetic equator.</td><td>−8 (−12 when F10.7 ≥ 150)</td></tr>
-          <tr><td>Real-time Bz, speed</td><td>Strong southward IMF means a storm is loading now (current hour only).</td><td>Bz −10: −10 · −20: −20; speed 600: −5 · 800: −10</td></tr>
+          <tr><td>Real-time Bz, speed</td><td>Strong southward IMF means a storm is loading now. L1 is about an hour upstream, so it counts for this hour and the next two.</td><td>Bz −10: −10 · −20: −20 · −30: −30 · −50: −45; speed 600: −5 · 800: −10 · 1000: −15 · 1500: −25</td></tr>
           <tr><td>Aurora overhead</td><td>The OVATION oval at your site means phase scintillation.</td><td>10%: −10 · 30%: −25 · 60%: −35</td></tr>
           <tr><td>PDOP / sats</td><td>Weak geometry multiplies every other error.</td><td>PDOP 3: −3 · 4: −8 · 6: −20 · 10: −40; under 5 sats: −50</td></tr>
         </tbody>
       </table>
-      <p class="muted small">Grades: A ≥ 90 · B ≥ 80 · C ≥ 70 · D ≥ 55 · F below. Beyond day 3 only Kp/Ap, solar flux and NASA-modelled CME arrivals are known, so those days carry lower confidence. This is a planning aid, not a guarantee: always check your own receiver’s fix quality and residuals. Thresholds live in <code>public/js/grading.js</code>.</p>
+      <p class="muted small">Grades: A ≥ 90 · B ≥ 80 · C ≥ 70 · D ≥ 55 · F below. Days 4–45 get a trend (quiet, unsettled, active, storm possible), not a grade: the 27-day outlook repeats what the Sun did one rotation ago, and the 45-day product is a daily Ap. Book crews from the 3-day grade. This is a planning aid, not a guarantee: always check your own receiver’s fix quality and residuals. Thresholds live in <code>public/js/grading.js</code>.</p>
     </section>
   </main>
 

@@ -1,5 +1,5 @@
 import { SOURCES, CROSS_CHECK_LINKS, CACHE_TTL, DEFAULT_SETTINGS, PROFILES, SWPC } from './config.js';
-import { fetchJSON, fetchText, loadAll } from './fetch.js';
+import { fetchJSON, fetchText, loadAll, staleFeeds } from './fetch.js';
 import * as P from './parsers.js';
 import { gradeConditions, gradeFor } from './grading.js';
 import { geomagneticLatitude, latitudeBand } from './geo.js';
@@ -233,12 +233,21 @@ async function refresh({ force = false } = {}) {
   regrade();
   renderAll();
   $('refreshBtn').disabled = false;
-  $('updated').textContent = `Updated ${fmtTime(new Date())}`;
+  const saved = staleFeeds().length;
+  $('updated').textContent = `Updated ${fmtTime(new Date())}${saved ? ` · ${saved} feed${saved > 1 ? 's' : ''} from saved copies` : ''}`;
 }
 
 function regrade() {
   const p = state.parsed;
   state.rt = realtime(p);
+  // Live readings that can raise the next hours or forbid a "go" (GPS-C2, GPS-H3).
+  const ex = extraNow();
+  Object.assign(state.rt, {
+    kpModel: p.kpModel,
+    propagated: p.propagated.filter((r) => Date.now() - r.time <= FRESH_MIN * 60000),
+    dst: ex.dst?.dst ?? null,
+    tecAnomaly: ex.tec && !ex.tec.modelOnly ? ex.tec.anomaly ?? null : null,
+  });
   state.result = gradeConditions({
     settings,
     kpForecast: p.kpForecast,
@@ -248,7 +257,22 @@ function regrade() {
     outlook27: p.outlook27,
     outlook45: p.outlook45,
     cmeArrivals: p.enlil,
+    midLatK: midLatSlots(p.daypre),
+    cmeCheck: state.errors.donkiEnlil ? 'unavailable' : 'ok',
   });
+}
+
+/** NOAA's lower-48 K forecast as absolute 3-hour UTC slots, for the grade (GPS-H3). */
+function midLatSlots(d) {
+  if (!d?.midK?.length || !d.dates?.length) return [];
+  const out = [];
+  for (const row of d.midK) {
+    const startH = parseInt(row.slot, 10);
+    row.k.forEach((k, i) => {
+      if (d.dates[i] && Number.isFinite(k)) out.push({ time: new Date(+d.dates[i] + startH * 3600000), k });
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- rendering
@@ -281,6 +305,7 @@ function renderErrors() {
   const ra = state.rt?.rowAges || {};
   const fmtAge = (m) => (m < 120 ? `${Math.round(m)} min` : `${(m / 60).toFixed(1)} h`);
   const old = [
+    ['Kp nowcast (1-minute)', a.kp, null],
     ['solar wind speed', a.wind, null],
     ['magnetic field (Bz)', a.mag, null],
     ['X-ray readings', a.xray, ra.xray],
@@ -294,6 +319,11 @@ function renderErrors() {
   }
   if (flagged.length) {
     msgs.push(`NOAA is still sending ${flagged.map(([n]) => n).join(' and ')}, but the ones from the last ${fmtAge(Math.min(...flagged.map(([, m]) => m)))} are marked unusable (the GOES sensor reports zero). They are left out of the grade until good readings return. That is “unknown”, not “calm”.`);
+  }
+  const saved = staleFeeds();
+  if (saved.length) {
+    const name = (url) => Object.entries(SOURCES).find(([, v]) => typeof v === 'string' && url.startsWith(v.split('?')[0]))?.[0] || new URL(url).hostname;
+    msgs.push(`These feeds didn’t answer, so a saved copy is shown: ${saved.map((f) => `${esc(name(f.url))} (${fmtAge(f.age / 60000)} old)`).join(', ')}. A saved copy is not new data.`);
   }
   const box = $('errors');
   box.hidden = !msgs.length;
@@ -312,6 +342,8 @@ function renderToday() {
   if (!today) {
     $('todayGrade').textContent = '?';
     $('todayVerdict').textContent = 'No Kp forecast available';
+    $('todayWindow').innerHTML = '';
+    $('todayAlerts').innerHTML = (r.warnings || []).map((x) => `<div class="warn">⚠ ${esc(x)}</div>`).join('');
     $('todayLearn').innerHTML = `<p>${L.todayKid(null)}</p>`;
     return;
   }
@@ -319,11 +351,23 @@ function renderToday() {
   $('todayGrade').textContent = today.grade;
   $('todayVerdict').textContent = today.verdict;
   $('todayScore').textContent = `Score ${today.score}/100 · ${PROFILES[settings.profile].label} · work hours ${settings.workStart}:00–${settings.workEnd}:00`;
+  // GPS-C1: a D/F work hour is shown as large as the letter, and a good stretch on
+  // a mixed day is "usable", never "best window" with a perfect score.
   const w = today.bestWindow;
-  $('todayWindow').innerHTML = w
-    ? `${w.good ? 'Best window' : 'Least-bad hour'}: <b>${fmtTime(w.start)} – ${fmtTime(w.end)}</b> (avg ${w.score})` +
-      (today.worstHour && today.worstHour.score < 80 ? `<br><span class="muted">Worst: ${fmtTime(today.worstHour.time)} (${today.worstHour.grade})</span>` : '')
-    : '';
+  const wh = today.worstHour;
+  const worstLine = wh && wh.score < 70 ? `<div class="worst ${gClass(wh.grade)}">Worst work hour: <b>${fmtHour(wh.time)}</b> <span class="worst-letter">${wh.grade}</span></div>` : '';
+  const windowLine = !w
+    ? ''
+    : w.good
+      ? `Best window: <b>${fmtTime(w.start)} – ${fmtTime(w.end)}</b>`
+      : w.partial
+        ? `Usable stretch: <b>${fmtTime(w.start)} – ${fmtTime(w.end)}</b> (A/B hours). The rest of the work day is worse.`
+        : `No A or B hours. Least-bad hour: <b>${fmtTime(w.start)}</b> (${gradeFor(w.score).grade})`;
+  $('todayWindow').innerHTML = worstLine + (windowLine ? `<div>${windowLine}</div>` : '');
+  const notGo = [...today.capReasons, ...today.flags];
+  $('todayAlerts').innerHTML =
+    (notGo.length ? `<div class="nogo"><b>Why this can’t be a go:</b><ul>${notGo.map((x) => `<li>${esc(x)}</li>`).join('')}</ul></div>` : '') +
+    today.warnings.map((x) => `<div class="warn">⚠ ${esc(x)}</div>`).join('');
 
   const now = r.now;
   const pill = $('nowGrade');
@@ -376,7 +420,7 @@ function renderToday() {
   $('todayLearn').innerHTML = L.todayKid(today, now) + `<p><a href="#learn">${L.NEW_HERE}</a></p>`;
 }
 
-/** Display-only readings added in 1.2.0 (not part of the grade). */
+/** Readings added in 1.2.0. Dst and TEC can forbid a "go"; the model Kp can raise an hour (see regrade). */
 function extraNow() {
   const p = state.parsed;
   const now = Date.now();
@@ -407,7 +451,7 @@ function renderHours() {
     .map((h, i) => {
       const hr = h.time.getHours();
       const off = hr < settings.workStart || hr >= settings.workEnd;
-      return `<button class="hour ${gClass(h.grade)} ${off ? 'off' : ''} ${h.isNow ? 'now' : ''}" style="background:var(--g)" data-i="${i}" title="${fmtDay(h.time)} ${fmtHour(h.time)}: ${h.grade} (${h.score})" aria-label="${fmtDay(h.time)} ${fmtHour(h.time)} grade ${h.grade}">${h.grade}</button>`;
+      return `<button class="hour ${h.missing ? 'gNA' : gClass(h.grade)} ${off ? 'off' : ''} ${h.isNow ? 'now' : ''}" style="background:var(--g)" data-i="${i}" title="${fmtDay(h.time)} ${fmtHour(h.time)}: ${h.grade} (${h.score})" aria-label="${fmtDay(h.time)} ${fmtHour(h.time)} grade ${h.grade}">${h.grade}</button>`;
     })
     .join('') +
     hours
@@ -434,6 +478,10 @@ function fmtHour(d) {
 
 function showHourDetail(h) {
   if (!h) return;
+  if (h.missing) {
+    $('hourDetail').innerHTML = `<b>${fmtDay(h.time)} ${fmtHour(h.time)}</b>: no Kp forecast for this hour. It counts as unknown, not quiet, so the day can’t be a go.`;
+    return;
+  }
   const fac = h.factors.filter((f) => f.penalty >= 0.5);
   $('hourDetail').innerHTML = `<b>${fmtDay(h.time)} ${fmtHour(h.time)}</b>: grade <b>${h.grade}</b> (${h.score}), ${esc(h.verdict)} · Kp ${h.kp.toFixed(2)} (${h.kpKind}) · ${h.sunlit ? 'daylight' : 'night'}<br>` +
     (fac.length ? fac.map((f) => `${esc(f.label)} <span class="muted">−${f.penalty.toFixed(1)}</span>`).join(' · ') : '<span class="muted">No penalties</span>') +
@@ -447,8 +495,8 @@ function renderDays() {
       return `<div class="day ${gClass(d.grade)}">
         <div class="top"><div><b>${i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : fmtDay(d.date)}</b><div class="muted small">${fmtDay(d.date)}</div></div><div class="letter">${d.grade}</div></div>
         <div>${esc(d.verdict)} <span class="muted small">(${d.score})</span></div>
-        <div class="small muted">Peak Kp ${d.kpMax.toFixed(2)} · ${d.bestWindow ? `best ${fmtHour(d.bestWindow.start)}–${fmtHour(d.bestWindow.end)}` : ''}</div>
-        <ul>${d.drivers.filter((x) => x.penalty >= 1).map((x) => `<li>${esc(x.label)}</li>`).join('') || '<li>Clean</li>'}
+        <div class="small muted">Peak Kp ${d.kpMax != null ? d.kpMax.toFixed(2) : '–'}${d.worstHour && d.worstHour.score < 70 ? ` · worst ${fmtHour(d.worstHour.time)} (${d.worstHour.grade})` : ''}${d.bestWindow && (d.bestWindow.good || d.bestWindow.partial) ? ` · ${d.bestWindow.good ? 'best' : 'usable'} ${fmtHour(d.bestWindow.start)}–${fmtHour(d.bestWindow.end)}` : ''}</div>
+        <ul>${[...d.capReasons, ...d.flags].map((x) => `<li style="color:var(--poor)">${esc(x)}</li>`).join('')}${d.drivers.filter((x) => x.penalty >= 1).map((x) => `<li>${esc(x.label)}</li>`).join('') || (d.capReasons.length || d.flags.length ? '' : '<li>Clean</li>')}
         ${cmes.map((c) => `<li style="color:var(--poor)">CME ${c.glancing ? 'glancing blow' : 'arrival'} ≈ ${fmtTime(c.arrival)} (NASA model)</li>`).join('')}</ul>
         <div class="muted small">${esc(d.source)}</div>
         <div class="learn">${L.dayKid(d)}</div>
@@ -466,11 +514,11 @@ function renderExtended() {
   $('extStrip').innerHTML = ext.length
     ? ext
         .map(
-          (d) => `<div class="ext ${gClass(d.grade)} ${d.confidence === 'Low' ? 'low' : ''}" title="${esc(d.source)} · confidence ${d.confidence}\nPeak Kp ≈ ${d.kpMax.toFixed(1)} · Ap ${d.ap}${d.f107 ? ` · F10.7 ${d.f107}` : ''}">
+          (d) => `<div class="ext t-${d.trend} ${d.confidence === 'Low' ? 'low' : ''}" title="${esc(d.source)} · confidence ${d.confidence}\nPeak Kp ≈ ${d.kpMax.toFixed(1)} · Ap ${d.ap}${d.f107 ? ` · F10.7 ${d.f107}` : ''}\nA trend, not a go/no-go. Book crews from the 3-day grade.">
           <div>${d.date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
-          <div class="l">${d.grade}</div>
-          <div class="muted">Kp ${d.kpMax.toFixed(0)}</div>
-          ${d.cme ? '<div class="cme">CME</div>' : ''}
+          <div class="l">${esc(d.trendLabel)}</div>
+          <div class="muted">Kp ${d.kpMax.toFixed(1)} · ${d.confidence}</div>
+          ${d.cme ? `<div class="cme">CME${d.cme.glancing ? ' (glancing)' : ''}</div>` : ''}
         </div>`,
         )
         .join('')
@@ -627,7 +675,7 @@ function renderHealth() {
   }
   const when = (d) => (d ? `${fmtDay(d)} ${fmtTime(d)}` : '');
   const row = (e) =>
-    `<li><b>${esc(e.constellation)} ${esc(e.id)}</b>: ${esc(e.why)}${e.since ? `, from ${esc(when(e.since))}` : ''}${e.until ? ` to ${esc(when(e.until))}` : e.since ? ', no end time yet' : ''}${e.nanu ? ` <span class="muted small">(notice ${esc(e.nanu)})</span>` : ''}</li>`;
+    `<li><b>${esc(e.constellation)}${e.id ? ` ${esc(e.id)}` : ''}</b>: ${esc(e.why)}${e.since ? `, from ${esc(when(e.since))}` : ''}${e.until ? ` to ${esc(when(e.until))}` : e.since ? ', no end time yet' : ''}${e.nanu ? ` <span class="muted small">(notice ${esc(e.nanu)})</span>` : ''}</li>`;
   const parts = [];
   parts.push(
     h.excludedNow.length
@@ -643,7 +691,7 @@ function renderHealth() {
       : 'GPS: NAVCEN’s notices didn’t load, so every GPS satellite counts. (They need the desktop app or npm start.)',
   );
   src.push(h.known.Galileo ? 'Galileo: European GNSS Service Centre.' : 'Galileo: the GSC status table didn’t load, so every Galileo satellite counts.');
-  src.push('GLONASS and BeiDou: no open health feed, so every satellite counts. Check GLONASS on its own site (Sources).');
+  src.push('GLONASS has its own status site (see Sources). BeiDou has no open health feed.');
   parts.push(`<p class="muted small">${src.join(' ')}</p>`);
   box.innerHTML = parts.join('');
 }
@@ -923,7 +971,7 @@ function renderMidLat() {
     <tr><td>Major or severe storm</td>${(d.probMid.major || []).map(cell).join('')}</tr>
     ${d.midKMax ? `<tr><td>Highest mid-latitude K</td>${d.midKMax.map((k) => `<td>${k}</td>`).join('')}</tr>` : ''}
     </tbody></table>
-    <p class="muted small">NOAA’s 3-day predictions${d.issued ? `, issued ${fmtDay(d.issued)} ${fmtTime(d.issued)}` : ''}. Each column is a UTC day. Shown for reference; the grade uses the planetary Kp forecast scaled to your magnetic latitude.</p>`;
+    <p class="muted small">NOAA’s 3-day predictions${d.issued ? `, issued ${fmtDay(d.issued)} ${fmtTime(d.issued)}` : ''}. Each column is a UTC day. When the lower-48 K is higher than the planetary Kp for an hour, the grade uses it.</p>`;
 }
 
 /** Nearest NOAA CORS stations + the FAA WAAS map. */

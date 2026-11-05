@@ -253,7 +253,8 @@ export function parseIssued(text) {
  * the Kp equivalent of its daily average, which is added here.
  */
 const KP_AP = [
-  [0, 0], [1, 4], [2, 7], [3, 15], [4, 27], [5, 48], [6, 80], [7, 140], [8, 240], [9, 400],
+  // Bartels Kp↔ap equivalents (GPS-L1: Kp 7 = 132, Kp 8 = 207).
+  [0, 0], [1, 4], [2, 7], [3, 15], [4, 27], [5, 48], [6, 80], [7, 132], [8, 207], [9, 400],
 ];
 export function apToKp(ap) {
   if (ap == null) return null;

@@ -40,13 +40,17 @@ The new readings (TEC, Dst, model Kp, mid-latitude odds, CORS, WAAS) are shown, 
 
 ## How the grade works
 
-Each hour starts at 100 and loses points for Kp, flare odds (sunlit side only), proton odds (high latitude), the post-sunset equatorial scintillation window, real-time southward Bz and fast wind, aurora overhead, and poor PDOP. Penalties scale with your **geomagnetic latitude** and your **work profile** (RTK/survey, drone, ag guidance, general nav). The day grade blends the average and the worst hour of your work hours (60/40).
+Each hour starts at 100 and loses points for Kp, flare odds (sunlit side only), proton odds (high latitude), the post-sunset equatorial scintillation window, real-time southward Bz and fast wind, aurora overhead, and poor PDOP. Penalties scale with your **geomagnetic latitude** and your **work profile** (RTK/survey, drone, ag guidance, general nav). The day grade blends the average and the worst hour of your work hours (60/40), but if any work hour is a D or an F the day takes that grade, so a calm morning can't average away a storm afternoon.
+
+The Kp for each hour is the worst of NOAA's 3-day forecast, the live 1-minute estimate (this hour and the next two, since L1 is about an hour upstream), NOAA's Geospace model, NOAA's lower-48 (mid-latitude) K, and any NASA-modelled CME arrival (6 hours before to 12 hours after). Some readings rule out a go outright (the grade stops at D): a survey hour at Kp 5 or more, Dst at or below −100 nT, a TEC anomaly above 10 at the site, or a hole in the Kp forecast during work hours. The grade card says which one did it, and warns when the NASA CME check didn't load.
 
 | A | B | C | D | F |
 |---|---|---|---|---|
 | ≥ 90 Excellent: go | ≥ 80 Good: go | ≥ 70 Fair: extra checks | ≥ 55 Poor: expect float | No-go for precision work |
 
-Days 1–3 use NOAA's full 3-day forecast (high confidence). Days 4–27 use the 27-day outlook's peak Kp (medium). Days 28–45 use the 45-day Ap forecast converted to an equivalent Kp (low). NASA-modelled CME arrivals bump the affected day. All thresholds are lookup tables in [`public/js/grading.js`](public/js/grading.js), so they're easy to tune. The page has a full "How it's graded" table.
+Days 1–3 get a letter from NOAA's full 3-day forecast (high confidence). Days 4–45 get a **trend word** instead (quiet, unsettled, active, storm possible) with the Kp and a confidence: the 27-day outlook (medium) repeats what the Sun did one rotation ago, and the 45-day Ap forecast (low) is coarser still. NASA-modelled CME arrivals raise the affected day. Book crews from the 3-day grade.
+
+The app opens on **Pensacola, FL**; change the site with the 📍 button. A failed NOAA feed may be stood in for by a saved copy only while it is young (an hour for live feeds, up to a day for slow ones), and the red banner names any feed shown from a saved copy. All thresholds are lookup tables in [`public/js/grading.js`](public/js/grading.js), so they're easy to tune. The page has a full "How it's graded" table.
 
 > This is a planning aid. Always confirm with your receiver's own fix status, residuals and check shots.
 

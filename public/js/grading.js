@@ -9,9 +9,21 @@
 //   R-scale flare probability     → solar radio bursts / sudden TEC jumps, sunlit side only
 //   S-scale proton probability    → polar-cap absorption / receiver noise, high latitude only
 //   Post-sunset equatorial window → plasma-bubble scintillation, low latitude only
-//   Real-time Bz / wind speed     → storm onset in the next hour or so
+//   Real-time Bz / wind speed     → storm onset: charged to this hour and the next two
 //   OVATION aurora at your site   → auroral oval overhead = phase scintillation
 //   PDOP / satellite count        → plain geometry from the GNSS almanac
+//
+// The Kp used for an hour is the worst of: NOAA's 3-day forecast, the live
+// 1-minute estimate (this hour and the next two), NOAA's Geospace model Kp,
+// NOAA's lower-48 (mid-latitude) K, and a NASA-modelled CME arrival.
+//
+// Some readings don't subtract points, they forbid a "go" (score held at D):
+// a survey hour at storm level (Kp 5+), Dst at or below -100 nT, an on-site
+// TEC anomaly above 10, and a hole in the Kp forecast during work hours.
+//
+// The day letter follows the worst work hour whenever that hour is a D or F,
+// so a calm morning can't average away a storm afternoon. Days 4-45 get a
+// trend word (quiet / active / storm possible), never a go letter.
 //
 // Thresholds are deliberately readable lookup tables so they're easy to tune.
 
@@ -35,8 +47,8 @@ export const TABLES = {
   kp: [[0, 0], [2, 0], [3, 4], [4, 12], [5, 30], [6, 50], [7, 70], [8, 85], [9, 95]],
   latFactor: [[0, 0.6], [20, 0.6], [40, 0.8], [50, 1.0], [58, 1.3], [65, 1.5], [90, 1.4]],
   pdop: [[2, 0], [3, 3], [4, 8], [6, 20], [10, 40]],
-  bz: [[-30, 30], [-20, 20], [-10, 10], [-5, 0]],
-  speed: [[500, 0], [600, 5], [800, 10], [1000, 15]],
+  bz: [[-50, 45], [-30, 30], [-20, 20], [-10, 10], [-5, 0]],
+  speed: [[500, 0], [600, 5], [800, 10], [1000, 15], [1500, 25]],
   aurora: [[5, 0], [10, 10], [30, 25], [60, 35]],
 };
 
@@ -53,6 +65,23 @@ export function gradeFor(score) {
 }
 
 const HOUR = 3600000;
+/** Live readings (L1 is ~30-60 min upstream) count for this hour and the next two. */
+export const LIVE_HOURS = 3;
+/** A modelled CME raises Kp from 6 h before to 12 h after its arrival (model error is ~±10 h). */
+export const CME_WINDOW = { before: 6, after: 12 };
+/** Highest score that still reads D: used when a reading forbids a "go". */
+export const NO_GO_CAP = 69;
+export const DST_NO_GO = -100;
+export const TEC_NO_GO = 10;
+
+/** Days 4-45: a trend, not a go/no-go letter. */
+export function trendFor(kp) {
+  if (kp >= 7) return { trend: 'storm', trendLabel: 'Strong storm possible' };
+  if (kp >= 5) return { trend: 'storm', trendLabel: 'Storm possible' };
+  if (kp >= 4) return { trend: 'active', trendLabel: 'Active' };
+  if (kp >= 3) return { trend: 'unsettled', trendLabel: 'Unsettled' };
+  return { trend: 'quiet', trendLabel: 'Quiet trend' };
+}
 
 function dayKeyLocal(d) {
   const y = d.getFullYear();
@@ -70,30 +99,37 @@ function startOfLocalDay(d) {
   return x;
 }
 
-/** Sum factors, scale by profile, and return the scored record. */
-function finish(factors, profileFactor) {
+/** Sum factors, scale by profile, apply any no-go caps, return the scored record. */
+function finish(factors, profileFactor, caps = []) {
   const scaled = factors
     .filter((f) => f.penalty > 0.05)
     .map((f) => ({ ...f, penalty: f.penalty * profileFactor }));
   const total = scaled.reduce((s, f) => s + f.penalty, 0);
-  const score = Math.max(0, Math.round(100 - total));
+  let score = Math.max(0, Math.round(100 - total));
+  if (caps.length) score = Math.min(score, NO_GO_CAP);
   const g = gradeFor(score);
-  return { score, grade: g.grade, verdict: g.verdict, factors: scaled.sort((a, b) => b.penalty - a.penalty) };
+  return { score, grade: g.grade, verdict: g.verdict, factors: scaled.sort((a, b) => b.penalty - a.penalty), caps };
 }
+
+const mean = (a) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : null);
 
 /**
  * Build the hourly timeline, per-day grades for the 3-day window, and
- * extended-outlook grades from the 27-day and 45-day products.
+ * extended-outlook trends from the 27-day and 45-day products.
  *
  * @param {object} p
  * @param {object} p.settings      lat, lon, profile, workStart, workEnd
  * @param {Array}  p.kpForecast    parsed noaa-planetary-k-index-forecast
  * @param {object} p.scales        parsed noaa-scales
- * @param {object} p.realtime      { kpNow, bz30, speed, xrayFlux, protonFlux, aurora }
+ * @param {object} p.realtime      { kpNow, bz30, speed, rNow, sNow, aurora,
+ *                                   kpModel:[{time,kp}], propagated:[{arrival,bz,speed}],
+ *                                   dst (nT), tecAnomaly (TECU, null if model-only) }
  * @param {Array}  p.geometry      geometryTimeline() samples (optional)
  * @param {Array}  p.outlook27     parsed 27-day outlook
  * @param {object} p.outlook45     parsed 45-day forecast
  * @param {Array}  p.cmeArrivals   NASA WSA-Enlil predicted Earth arrivals
+ * @param {Array}  p.midLatK       NOAA lower-48 K forecast, [{time, k}] per 3-hour UTC slot
+ * @param {string} p.cmeCheck      'ok' or 'unavailable' (NASA DONKI failed to load)
  * @param {Date}   p.now
  */
 export function gradeConditions({
@@ -105,10 +141,13 @@ export function gradeConditions({
   outlook27 = [],
   outlook45 = { ap: [], f107: [] },
   cmeArrivals = [],
+  midLatK = [],
+  cmeCheck = 'ok',
   now = new Date(),
 }) {
   const { lat, lon } = settings;
-  const profileFactor = (PROFILES[settings.profile] || PROFILES.survey).factor;
+  const profile = PROFILES[settings.profile] || PROFILES.survey;
+  const profileFactor = profile.factor;
   const mlat = geomagneticLatitude(lat, lon);
   const absM = Math.abs(mlat);
   const latF = interp(TABLES.latFactor, absM);
@@ -123,6 +162,28 @@ export function gradeConditions({
   const kpAt = (t) => {
     let best = null;
     for (const s of kpSlots) if (t >= s.start && t < s.start + 3 * HOUR) best = s;
+    return best;
+  };
+  const firstSlot = kpSlots.length ? Math.min(...kpSlots.map((s) => s.start)) : 0;
+  const lastSlotEnd = kpSlots.length ? Math.max(...kpSlots.map((s) => s.start)) + 3 * HOUR : 0;
+
+  const midKAt = (t) => {
+    let k = null;
+    for (const m of midLatK) if (m.time && t >= +m.time && t < +m.time + 3 * HOUR && m.k != null) k = Math.max(k ?? 0, m.k);
+    return k;
+  };
+  const modelKpIn = (t) => {
+    const v = (realtime.kpModel || []).filter((r) => +r.time >= t && +r.time < t + HOUR).map((r) => r.kp);
+    return v.length ? Math.max(...v) : null;
+  };
+  // CME arrivals: no cap for a glancing blow (the model's own Kp stands).
+  const cmeKp = (a) => (a.kpEstimate?.length ? Math.max(...a.kpEstimate) : 5);
+  const cmeAt = (t) => {
+    let best = null;
+    for (const a of cmeArrivals) {
+      const at = +a.arrival;
+      if (t + HOUR > at - CME_WINDOW.before * HOUR && t < at + CME_WINDOW.after * HOUR && (!best || cmeKp(a) > cmeKp(best))) best = a;
+    }
     return best;
   };
 
@@ -142,23 +203,48 @@ export function gradeConditions({
   for (let h = 0; h < 72; h++) {
     const t = t0 + h * HOUR;
     const mid = new Date(t + HOUR / 2);
-    const slot = kpAt(t);
-    if (!slot) continue; // beyond the forecast
-    const factors = [];
     const isNow = t === currentHourStart;
+    const live = t >= currentHourStart && t < currentHourStart + LIVE_HOURS * HOUR;
+    const slot = kpAt(t);
+    if (!slot) {
+      // Inside the forecast's span but no slot: a hole, which is "unknown", never "quiet".
+      if (kpSlots.length && t >= firstSlot && t < lastSlotEnd) {
+        hours.push({ time: new Date(t), kp: null, kpKind: 'missing', missing: true, sunlit: solarElevation(mid, lat, lon) > -2, isNow, live, score: null, grade: '?', verdict: 'No Kp forecast for this hour', factors: [], caps: ['No Kp forecast for this hour'] });
+      }
+      continue;
+    }
+    const factors = [];
+    const caps = [];
+
+    // The worst Kp any source gives for this hour.
     let kp = slot.kp;
-    if (isNow && realtime.kpNow != null) kp = Math.max(kp, realtime.kpNow);
-    factors.push({ key: 'kp', label: `Kp ${kp.toFixed(1)} geomagnetic activity`, penalty: interp(TABLES.kp, kp) * latF });
+    let kpFrom = '';
+    const raise = (v, from) => {
+      if (v != null && v > kp) {
+        kp = v;
+        kpFrom = from;
+      }
+    };
+    if (live) raise(realtime.kpNow, 'live estimate');
+    raise(modelKpIn(t), 'NOAA Geospace model');
+    raise(midKAt(t), 'lower-48 K forecast');
+    const cme = cmeAt(t);
+    if (cme) raise(cmeKp(cme), `NASA CME ${cme.glancing ? 'glancing blow' : 'arrival'} model`);
+    factors.push({ key: 'kp', label: `Kp ${kp.toFixed(1)} geomagnetic activity${kpFrom ? ` (${kpFrom})` : ''}`, penalty: interp(TABLES.kp, kp) * latF });
+    if (profile.stormKp != null && kp >= profile.stormKp) caps.push(`Kp ${kp.toFixed(1)} is NOAA storm level (G1 or worse): no-go for ${profile.label}`);
 
     const sunEl = solarElevation(mid, lat, lon);
     const sunlit = sunEl > -2;
-    const sc = scaleByDate.get(dayKeyUTC(mid));
-    if (sc && sunlit) {
-      const p = ((sc.rMajorProb || 0) / 100) * 35 + ((sc.rMinorProb || 0) / 100) * 8;
-      factors.push({ key: 'flare', label: `Flare risk (R1-R2 ${sc.rMinorProb ?? 0}%, R3+ ${sc.rMajorProb ?? 0}%) on sunlit side`, penalty: p });
+    // Flare/proton odds are UTC-day products; the hour sits on a local day. Use the worse of the two.
+    const scs = [scaleByDate.get(dayKeyUTC(mid)), scaleByDate.get(dayKeyLocal(mid))].filter(Boolean);
+    if (scs.length && sunlit) {
+      const flarePen = (sc) => ((sc.rMajorProb || 0) / 100) * 35 + ((sc.rMinorProb || 0) / 100) * 8;
+      const sc = scs.reduce((a, b) => (flarePen(b) > flarePen(a) ? b : a));
+      factors.push({ key: 'flare', label: `Flare risk (R1-R2 ${sc.rMinorProb ?? 0}%, R3+ ${sc.rMajorProb ?? 0}%) on sunlit side`, penalty: flarePen(sc) });
     }
-    if (sc && sc.sProb) {
-      factors.push({ key: 'proton', label: `Proton event chance ${sc.sProb}%`, penalty: (sc.sProb / 100) * 10 * polarF });
+    const sProb = Math.max(0, ...scs.map((sc) => sc.sProb || 0));
+    if (sProb) {
+      factors.push({ key: 'proton', label: `Proton event chance ${sProb}%`, penalty: (sProb / 100) * 10 * polarF });
     }
     const lst = localSolarHour(mid, lon);
     if (absM < 25 && (lst >= 19 || lst < 2)) {
@@ -169,9 +255,9 @@ export function gradeConditions({
       const pen = geo.count < 5 || !Number.isFinite(geo.pdop) ? 50 : interp(TABLES.pdop, geo.pdop);
       factors.push({ key: 'pdop', label: `PDOP ${Number.isFinite(geo.pdop) ? geo.pdop.toFixed(1) : '∞'} (${geo.count} sats)`, penalty: pen });
     }
-    if (isNow) addRealtimeFactors(factors, realtime, sunlit, polarF);
+    if (live) addLiveFactors(factors, caps, realtime, t, { isNow, sunlit, polarF });
 
-    hours.push({ time: new Date(t), kp, kpKind: slot.kind, sunlit, isNow, ...finish(factors, profileFactor) });
+    hours.push({ time: new Date(t), kp, kpKind: kpFrom ? `${slot.kind}, raised by ${kpFrom}` : slot.kind, sunlit, isNow, live, ...finish(factors, profileFactor, caps) });
   }
 
   // ---- per-day grades over work hours -------------------------------------
@@ -181,34 +267,61 @@ export function gradeConditions({
     if (!dayMap.has(key)) dayMap.set(key, []);
     dayMap.get(key).push(h);
   }
+  const inWork = (h) => {
+    const hr = h.time.getHours();
+    return hr >= settings.workStart && hr < settings.workEnd;
+  };
   const days = [];
   for (const [key, list] of dayMap) {
-    const work = list.filter((h) => {
-      const hr = h.time.getHours();
-      return hr >= settings.workStart && hr < settings.workEnd;
-    });
+    const work = list.filter(inWork);
     const use = work.length ? work : list;
-    const avg = use.reduce((s, h) => s + h.score, 0) / use.length;
-    const min = Math.min(...use.map((h) => h.score));
-    const score = Math.round(0.6 * avg + 0.4 * min);
+    const known = use.filter((h) => !h.missing);
+    const flags = [];
+    let score;
+    let blendScore = null;
+    let worstHour = null;
+    if (known.length) {
+      const avg = mean(known.map((h) => h.score));
+      worstHour = known.reduce((a, b) => (b.score < a.score ? b : a));
+      blendScore = Math.round(0.6 * avg + 0.4 * worstHour.score);
+      // GPS-C1: a D or F work hour sets the day letter. Calm hours can't average it away.
+      score = worstHour.score < 70 ? Math.min(blendScore, worstHour.score) : blendScore;
+    } else {
+      score = NO_GO_CAP;
+    }
+    if (use.some((h) => h.missing)) {
+      flags.push('The Kp forecast has a hole during work hours. Those hours are unknown, not quiet.');
+      score = Math.min(score, NO_GO_CAP);
+    }
+    // One line per kind of reason: the storm rule is reported once, at its peak Kp.
+    const storm = use.filter((h) => (h.caps || []).some((c) => c.includes('NOAA storm level')));
+    const capReasons = [...new Set(use.flatMap((h) => (h.caps || []).filter((c) => !c.includes('NOAA storm level') && !(h.missing && c.startsWith('No Kp forecast')))))];
+    if (storm.length) {
+      const peak = Math.max(...storm.map((h) => h.kp));
+      capReasons.unshift(`Kp reaches ${peak.toFixed(1)} in work hours, NOAA storm level (G1 or worse): no-go for ${profile.label}`);
+    }
     const g = gradeFor(score);
     days.push({
       key,
       date: new Date(`${key}T12:00:00`),
       score,
+      blendScore,
       grade: g.grade,
       verdict: g.verdict,
-      kpMax: Math.max(...list.map((h) => h.kp)),
+      kpMax: list.some((h) => h.kp != null) ? Math.max(...list.filter((h) => h.kp != null).map((h) => h.kp)) : null,
       drivers: topDrivers(use),
       bestWindow: bestWindow(list, settings),
-      worstHour: use.reduce((a, b) => (b.score < a.score ? b : a)),
+      worstHour,
+      flags,
+      capReasons,
+      warnings: [],
       hours: list,
       confidence: 'High',
       source: 'NOAA 3-day Kp + R/S probabilities' + (geometry.length ? ' + live GNSS geometry' : ''),
     });
   }
 
-  // ---- extended outlook (27-day, then 45-day) -----------------------------
+  // ---- extended outlook (27-day, then 45-day): trends, not go letters ------
   const covered = new Set(days.map((d) => d.key));
   const extended = [];
   const pushExtended = (date, kpMax, ap, f107v, source, confidence) => {
@@ -216,37 +329,45 @@ export function gradeConditions({
     if (covered.has(key) || date.getTime() < t0 - 86400000) return;
     covered.add(key);
     // A NASA-modelled CME arrival beyond NOAA's 3-day window raises the peak Kp.
-    const cme = cmeArrivals.find((a) => dayKeyUTC(a.arrival) === key);
-    if (cme) {
-      const k = cme.kpEstimate.length ? Math.max(...cme.kpEstimate) : 5;
-      kpMax = Math.max(kpMax, cme.glancing ? Math.min(k, 5) : k);
-    }
-    const factors = [{ key: 'kp', label: `Peak Kp ≈ ${kpMax.toFixed(1)}${cme ? ' (CME arrival modelled)' : ''}`, penalty: interp(TABLES.kp, kpMax) * latF }];
-    if (f107v >= 150) {
-      factors.push({ key: 'flux', label: `High solar flux (F10.7 ${f107v}): more flares, higher TEC`, penalty: f107v >= 200 ? 6 : 3 });
-    }
-    const r = finish(factors, profileFactor);
-    extended.push({ key, date: new Date(`${key}T12:00:00`), kpMax, ap, f107: f107v, source, confidence, cme: cme || null, ...r });
+    const cme = cmeArrivals.find((a) => dayKeyUTC(a.arrival) === key) || null;
+    if (cme) kpMax = Math.max(kpMax, cmeKp(cme));
+    extended.push({ key, date: new Date(`${key}T12:00:00`), kpMax, ap, f107: f107v, source, confidence, cme, ...trendFor(kpMax) });
   };
-  for (const d of outlook27) pushExtended(d.date, d.kpMax, d.ap, d.f107, 'NOAA 27-day outlook', 'Medium');
+  for (const d of outlook27) pushExtended(d.date, d.kpMax, d.ap, d.f107, 'NOAA 27-day outlook (repeats what the Sun did one rotation ago)', 'Medium');
   const flux45 = new Map((outlook45.f107 || []).map((f) => [dayKeyUTC(f.date), f.f107]));
   for (const d of outlook45.ap || []) {
     pushExtended(d.date, apToKp(d.ap), d.ap, flux45.get(dayKeyUTC(d.date)) ?? null, 'USAF/NOAA 45-day Ap', 'Low');
   }
   extended.sort((a, b) => a.date - b.date);
 
+  // ---- warnings that belong on the grade card ------------------------------
+  const warnings = [];
+  if (cmeCheck === 'unavailable') warnings.push('CME check did not load. This letter does not include a possible eruption.');
+  if (days[0]) days[0].warnings = warnings;
+
   const nowHour = hours.find((h) => h.isNow) || null;
-  return { mlat, latFactor: latF, profileFactor, hours, days, extended, now: nowHour };
+  return { mlat, latFactor: latF, profileFactor, hours, days, extended, warnings, now: nowHour };
 }
 
-function addRealtimeFactors(factors, rt, sunlit, polarF) {
-  if (rt.bz30 != null && rt.bz30 < -5) {
-    factors.push({ key: 'bz', label: `IMF Bz ${rt.bz30.toFixed(1)} nT southward (30-min mean)`, penalty: interp(TABLES.bz, rt.bz30) });
+/** Live readings, charged to this hour and the next two (the time L1 wind takes to arrive, plus slack). */
+function addLiveFactors(factors, caps, rt, t, { isNow, sunlit, polarF }) {
+  // NOAA's propagated L1 wind says which hour each reading reaches Earth; use it when it's worse.
+  const arriving = (rt.propagated || []).filter((r) => +r.arrival >= t && +r.arrival < t + HOUR);
+  const bzArr = mean(arriving.map((r) => r.bz).filter((v) => v != null));
+  const spArr = mean(arriving.map((r) => r.speed).filter((v) => v != null));
+  const bz = [rt.bz30, bzArr].filter((v) => v != null);
+  const bzUse = bz.length ? Math.min(...bz) : null;
+  const sp = [rt.speed, spArr].filter((v) => v != null);
+  const spUse = sp.length ? Math.max(...sp) : null;
+  if (bzUse != null && bzUse < -5) {
+    const from = bzArr != null && (rt.bz30 == null || bzArr < rt.bz30) ? 'arriving this hour' : '30-min mean';
+    factors.push({ key: 'bz', label: `IMF Bz ${bzUse.toFixed(1)} nT southward (${from})`, penalty: interp(TABLES.bz, bzUse) });
   }
-  if (rt.speed != null && rt.speed > 500) {
-    factors.push({ key: 'speed', label: `Solar wind ${Math.round(rt.speed)} km/s`, penalty: interp(TABLES.speed, rt.speed) });
+  if (spUse != null && spUse > 500) {
+    factors.push({ key: 'speed', label: `Solar wind ${Math.round(spUse)} km/s`, penalty: interp(TABLES.speed, spUse) });
   }
-  if (rt.rNow >= 1 && sunlit) {
+  // A flare's radio burst lasts minutes: this hour only.
+  if (isNow && rt.rNow >= 1 && sunlit) {
     factors.push({ key: 'flareNow', label: `R${rt.rNow} radio blackout in progress`, penalty: rt.rNow >= 3 ? 35 : 8 });
   }
   if (rt.sNow >= 1) {
@@ -255,6 +376,8 @@ function addRealtimeFactors(factors, rt, sunlit, polarF) {
   if (rt.aurora != null && rt.aurora > 5) {
     factors.push({ key: 'aurora', label: `Aurora probability ${Math.round(rt.aurora)}% overhead`, penalty: interp(TABLES.aurora, rt.aurora) });
   }
+  if (rt.dst != null && rt.dst <= DST_NO_GO) caps.push(`Dst ${Math.round(rt.dst)} nT: a major storm is under way`);
+  if (rt.tecAnomaly != null && rt.tecAnomaly > TEC_NO_GO) caps.push(`Ionosphere (TEC) ${rt.tecAnomaly.toFixed(1)} TECU above normal at your site`);
 }
 
 function topDrivers(hours) {
@@ -268,13 +391,20 @@ function topDrivers(hours) {
   return [...agg.values()].sort((a, b) => b.penalty - a.penalty).slice(0, 3);
 }
 
-/** Longest run of A/B hours inside work hours (falls back to best-scoring run). */
+/**
+ * Longest run of A/B hours inside work hours.
+ * good: true only when every work hour is A or B. When some work hours are
+ * worse, the run is still returned (partial: true) so the crew can see the
+ * usable stretch, but it is never presented as "the day is fine".
+ */
 export function bestWindow(hours, settings) {
   const work = hours.filter((h) => {
     const hr = h.time.getHours();
     return hr >= settings.workStart && hr < settings.workEnd;
   });
   const list = work.length ? work : hours;
+  const known = list.filter((h) => !h.missing);
+  const allGood = list.length > 0 && list.every((h) => !h.missing && h.score >= 80);
   let best = null;
   let run = [];
   const flush = () => {
@@ -282,18 +412,20 @@ export function bestWindow(hours, settings) {
     run = [];
   };
   for (const h of list) {
-    if (h.score >= 80) run.push(h);
+    if (!h.missing && h.score >= 80) run.push(h);
     else flush();
   }
   flush();
   if (!best) {
-    const top = list.reduce((a, b) => (b.score > a.score ? b : a), list[0]);
-    return top ? { start: top.time, end: new Date(top.time.getTime() + HOUR), score: top.score, good: false } : null;
+    if (!known.length) return null;
+    const top = known.reduce((a, b) => (b.score > a.score ? b : a));
+    return { start: top.time, end: new Date(top.time.getTime() + HOUR), score: top.score, good: false, partial: false };
   }
   return {
     start: best[0].time,
     end: new Date(best[best.length - 1].time.getTime() + HOUR),
     score: Math.round(best.reduce((s, h) => s + h.score, 0) / best.length),
-    good: true,
+    good: allGood,
+    partial: !allGood,
   };
 }

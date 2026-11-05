@@ -212,13 +212,24 @@ test('storm penalty is larger at high magnetic latitude than near the equator', 
   assert.ok(kpPen(fairbanks) > kpPen(quito));
 });
 
-test('real-time southward Bz and aurora overhead hit the current hour only', () => {
+test('a storm onset (southward Bz, fast wind, aurora) marks this hour and the next two, not later ones', () => {
   const r = scenario({ rt: { bz30: -18, speed: 750, aurora: 35 } });
   assert.ok(r.now, 'current hour present');
   const keys = r.now.factors.map((f) => f.key);
   assert.ok(keys.includes('bz') && keys.includes('aurora') && keys.includes('speed'));
-  const other = r.hours.find((h) => !h.isNow);
-  assert.ok(!other.factors.some((f) => f.key === 'bz'));
+  const i = r.hours.indexOf(r.now);
+  for (const h of r.hours.slice(i + 1, i + 3)) assert.ok(h.factors.some((f) => f.key === 'bz'), `${h.time} should carry the onset`);
+  assert.ok(!r.hours[i + 3].factors.some((f) => f.key === 'bz'), 'three hours on, the live reading no longer applies');
+  assert.ok(!r.hours[0].factors.some((f) => f.key === 'bz'), 'past hours are not charged');
+});
+
+test('a 3-hour Kp 6 storm inside the work day makes the day an F, not a go', () => {
+  const kps = Array(48).fill(2);
+  kps[16 + 6] = 6; // one slot in the middle of today
+  const r = gradeConditions({ settings: { ...DENVER, workStart: 0, workEnd: 24 }, kpForecast: P.parseKpForecast(H.kpForecastArrays(NOW, kps)), now: NOW });
+  const day = r.days.find((d) => d.hours.some((h) => h.kp === 6));
+  assert.equal(day.grade, 'F');
+  assert.equal(day.bestWindow.good, false, 'the quiet hours are a usable stretch, not a "best window" for the day');
 });
 
 test('flare odds only penalise sunlit hours', () => {

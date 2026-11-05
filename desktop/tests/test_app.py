@@ -268,6 +268,9 @@ class ShippedCopyTests(unittest.TestCase):
         # Watched time accrues only between checks, capped per gap (a sleeping PC doesn't count).
         clock = [1000.0]
         with mock.patch.object(self.app.time, "monotonic", lambda: clock[0]):
+            # GPS-L3: the check above ran on the real clock. Restart the watch on the
+            # fake clock, or a PC awake < 1000 s gets one extra capped step.
+            self.app._late_watch.update(key=None)
             self.app.seal_status()
             for _ in range(int(self.app.HAND_EDIT_WAIT_S / self.app.WATCH_GAP_CAP_S) - 1):
                 clock[0] += 3600  # an hour between checks still counts as 15 s

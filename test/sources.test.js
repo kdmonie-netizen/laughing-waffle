@@ -56,7 +56,7 @@ test('the stale "until further notice" lines do NOT take PRN 11 and 25 out today
 test('without the outage file, advisory "until further notice" lines are shown, not applied', () => {
   const h = Hh.buildHealth({ oa: Hh.parseNavcenOA(F('navcen-opsadvisory.oa1')) }, NOW);
   assert.equal(h.usable(sat('GPS', 'GPS BIII-5  (PRN 11)'), NOW), true);
-  assert.deepEqual(h.notes.map((n) => n.id).sort(), ['PRN 03', 'PRN 11', 'PRN 25']); // FCSTEXTD too
+  assert.deepEqual(h.notes.filter((n) => !n.unchecked).map((n) => n.id).sort(), ['PRN 03', 'PRN 11', 'PRN 25']); // FCSTEXTD too
   assert.equal(h.known.GPSconfirmed, false);
 });
 

@@ -99,6 +99,9 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 40px; display: grid
 
 /* grade colours */
 .gA { --g: var(--good); } .gB { --g: var(--ok); } .gC { --g: var(--fair); } .gD { --g: var(--poor); } .gF { --g: var(--bad); }
+.gNA { --g: #5b6578; }
+/* Days 4-45 are trends, not go letters (GPS-H2). */
+.t-quiet { --g: #3f8f6a; } .t-unsettled { --g: var(--ok); } .t-active { --g: var(--fair); } .t-storm { --g: var(--bad); }
 
 /* ---- hour strip -------------------------------------------------------- */
 .hours { display: grid; grid-template-columns: repeat(72, minmax(14px, 1fr)); gap: 2px; overflow-x: auto; padding-bottom: 6px; }
@@ -117,7 +120,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 18px 16px 40px; display: grid
 .day ul { margin: 6px 0 0; padding-left: 16px; font-size: 0.85rem; }
 .outlook-strip { margin-top: 14px; display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 6px; }
 .ext { background: var(--panel-2); border-radius: 8px; padding: 6px; text-align: center; border-bottom: 3px solid var(--g); font-size: 0.75rem; }
-.ext .l { font-size: 1.3rem; font-weight: 800; color: var(--g); }
+.ext .l { font-size: 0.82rem; font-weight: 700; color: var(--g); line-height: 1.15; min-height: 2.3em; display: flex; align-items: center; justify-content: center; }
 .ext.low { opacity: 0.75; }
 .ext .cme { color: var(--poor); font-weight: 700; }
 
@@ -303,3 +306,11 @@ body.learn-on .day .learn, body.learn-on .hour-detail .learn { font-size: 0.92re
 .img-note { padding: 16px; text-align: center; }
 .errors > div + div { margin-top: 6px; }
 #midLat table { margin-top: 4px; }
+
+/* Grade card: worst hour as loud as the letter, and the reasons a "go" was blocked. */
+.worst { font-size: 1.05rem; margin-bottom: 6px; }
+.worst .worst-letter { display: inline-block; font-size: 2rem; font-weight: 800; color: var(--g); vertical-align: middle; margin-left: 6px; }
+.nogo, .warn { margin-top: 10px; padding: 8px 10px; border-radius: 10px; font-size: 0.86rem; text-align: left; }
+.nogo { background: color-mix(in srgb, var(--poor) 18%, transparent); border: 1px solid color-mix(in srgb, var(--poor) 55%, transparent); }
+.nogo ul { margin: 4px 0 0; padding-left: 18px; }
+.warn { background: color-mix(in srgb, var(--fair) 16%, transparent); border: 1px solid color-mix(in srgb, var(--fair) 55%, transparent); }

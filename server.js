@@ -53,6 +53,10 @@ async function proxy(req, res, target) {
   if (url.protocol !== 'https:' || !ALLOWED_HOSTS.has(url.hostname)) {
     return send(res, 403, `Host not allowed: ${url.hostname}`);
   }
+  // GPS-L2: same rules as the office app's check_proxy_target: no user info, port 443 only.
+  if (url.username || url.password || (url.port && url.port !== '443')) {
+    return send(res, 403, 'Only plain https URLs on port 443 are allowed');
+  }
   const hit = cache.get(url.href);
   if (hit && Date.now() - hit.t < CACHE_MS) {
     res.writeHead(hit.status, { 'content-type': hit.type, 'x-cache': 'HIT', ...SANDBOX });
