@@ -216,13 +216,13 @@ dlg = await page.evaluate((k) => {
 check(!dlg.open && dlg.flash && dlg.inView, 'See all words jumps to that word in the list');
 
 // Quiz: one right answer, one wrong answer, then finish and reset.
-await page.locator('.quiz-q[data-i="0"] .quiz-choice[data-j="1"]').click(); // right (answer 1)
-await page.locator('.quiz-q[data-i="1"] .quiz-choice[data-j="1"]').click(); // wrong (answer 0)
+await page.locator('#quiz .quiz-q[data-i="0"] .quiz-choice[data-j="1"]').click(); // right (answer 1)
+await page.locator('#quiz .quiz-q[data-i="1"] .quiz-choice[data-j="1"]').click(); // wrong (answer 0)
 const quiz = await page.evaluate(() => ({
-  q0: document.querySelector('.quiz-q[data-i="0"] .quiz-why').textContent,
-  q1: document.querySelector('.quiz-q[data-i="1"] .quiz-why').textContent,
-  q1right: document.querySelector('.quiz-q[data-i="1"] .quiz-choice[data-j="0"]').classList.contains('right'),
-  locked: document.querySelector('.quiz-q[data-i="0"] .quiz-choice[data-j="0"]').disabled,
+  q0: document.querySelector('#quiz .quiz-q[data-i="0"] .quiz-why').textContent,
+  q1: document.querySelector('#quiz .quiz-q[data-i="1"] .quiz-why').textContent,
+  q1right: document.querySelector('#quiz .quiz-q[data-i="1"] .quiz-choice[data-j="0"]').classList.contains('right'),
+  locked: document.querySelector('#quiz .quiz-q[data-i="0"] .quiz-choice[data-j="0"]').disabled,
   score: document.getElementById('quizScore').textContent,
 }));
 check(quiz.q0.startsWith('Right!') && quiz.q1.startsWith('Not quite.') && quiz.q1right && quiz.locked, `quiz feedback: "${quiz.q0.slice(0, 40)}" / "${quiz.q1.slice(0, 50)}"`);
@@ -234,6 +234,33 @@ await page.locator('#quizScore').scrollIntoViewIfNeeded();
 await page.locator('#quiz').screenshot({ path: `shot-${scenario}-quiz.png` });
 await page.locator('#quizReset').click();
 check(/Score: 0 of 6/.test(await page.evaluate(() => document.getElementById('quizScore').textContent)), 'Try again resets the quiz');
+
+// ---- 1.4.0: two grades, local weather, Weather & RTK learning area, crew quizzes
+const v14 = await page.evaluate(() => ({
+  cols: [...document.querySelectorAll('#gradeCols .grade-col')].map((c) => c.querySelector('.mode-name').textContent + ' ' + c.querySelector('.grade').textContent),
+  netHours: document.querySelectorAll('#hourStrip .hour.network').length,
+  baseHours: document.querySelectorAll('#hourStrip .hour.base').length,
+  wxTiles: document.querySelectorAll('#wxStats .stat').length,
+  wxFirst: document.querySelector('#wxStats .stat .v')?.textContent,
+  dayModes: document.querySelectorAll('#dayCards .day-mode').length,
+  compare: document.querySelectorAll('#wxCompare tbody tr').length,
+  myths: document.querySelectorAll('#wxMyths li').length,
+  fqOptions: document.querySelectorAll('#fqSel option').length,
+  fqQs: document.querySelectorAll('#fq .quiz-q').length,
+}));
+console.log('1.4.0:', JSON.stringify(v14));
+check(v14.cols.length === 2 && /FDOT network/i.test(v14.cols[0]) && /Base \+ rover/i.test(v14.cols[1]), `two grade columns: ${v14.cols.join(' | ')}`);
+check(v14.netHours > 24 && v14.netHours === v14.baseHours, `hour strip has a network row and a base row (${v14.netHours}/${v14.baseHours})`);
+check(v14.dayModes === 6, `day cards show both grades (${v14.dayModes} lines)`);
+check(v14.wxTiles === 6 && /%$/.test(v14.wxFirst || ''), `local weather tiles (${v14.wxTiles}, thunder ${v14.wxFirst})`);
+check(v14.compare === 10 && v14.myths >= 10, `Weather & RTK learning area filled (${v14.compare} rows, ${v14.myths} myths)`);
+check(v14.fqOptions === 10 && v14.fqQs === 10, `crew quiz picker: ${v14.fqOptions} quizzes, ${v14.fqQs} questions shown`);
+await page.locator('#fq .quiz-q[data-i="0"] .quiz-choice[data-j="0"]').click();
+const fq1 = await page.evaluate(() => document.querySelector('#fq .quiz-q[data-i="0"] .quiz-why').textContent);
+check(/^(Right!|Not quite\.)/.test(fq1), `crew quiz feedback: "${fq1.slice(0, 50)}"`);
+await page.selectOption('#fqSel', '4');
+const fq5 = await page.evaluate(() => ({ score: document.getElementById('fqScore').textContent, first: document.querySelector('#fq .quiz-q legend').textContent }));
+check(/Score: 0 of 10/.test(fq5.score), `picking quiz 5 starts fresh: "${fq5.first.slice(0, 50)}"`);
 
 // ---------------------------------------------------------- 1.2.0 sources
 await page.locator('#sats').scrollIntoViewIfNeeded();

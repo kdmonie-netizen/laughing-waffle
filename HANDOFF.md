@@ -4,6 +4,8 @@
 **Branch:** `claude/gps-conditions-dashboard-c7d20v` (keep working here and push here)
 **Status (4 Nov 2026):** the dashboard and Learn mode are both done and pushed. Steps 1–8 in section 5 are finished; see "What was done" there for the choices made.
 
+**Update (5 Nov 2026, version 1.4.0):** two RTK grades (FDOT network, own base + rover) with local weather, a Weather & RTK learning area, and 10 crew quizzes. Section 11 is the knowledge wrap-up for writing more quizzes.
+
 **Update (5 Nov 2026, version 1.3.0):** all 18 findings of the outside audit (`KJM_GPS_Conditions_AUDIT_2026-11-05.md`) were approved and fixed; see its fix log and section 10 below.
 
 Read `README.md` first for what the app does and how the grade works. This file only covers what a new session needs to continue.
@@ -168,3 +170,51 @@ The outside audit found that the common bad days (a few storm hours, a storm jus
 - `test/audit-fixes.test.js` reproduces every audit scenario (Pensacola, RTK, Central time) and is part of `npm test`.
 - The audit's own `audit_tests/` folder lives on the office PC, not in this repo. Run it there after pulling: `TZ=America/Chicago node --test audit_tests/*.test.js`. Its API guesses may differ from the names used here (`cmeCheck`, `midLatK`, `realtime.dst`, `realtime.tecAnomaly`, `realtime.kpModel`, `realtime.propagated`); if one fails only on a name, align the test, not the grade.
 - Ship from the office PC as usual: `python -B desktop/package_to_dropbox.py` (dry run), then `--go`.
+
+## 11. Weather, RTK and quizzes: knowledge wrap-up (1.4.0, 5 Nov 2026)
+
+### What the owner asked for
+Learn how weather affects GPS on the **FDOT RTK network (FPRN)** and on an **own base + rover**; show **two grades**; add a **learning area about weather**; wrap the knowledge up here so the office can **make quizzes for the field crews later**; and make 10 quizzes of 10 questions now. In answers to follow-up questions the owner said:
+- **Grades are for the GPS math only, not safety.** No lightning stop, heat, wind safety or drone rules in the grades, the learning area or the quizzes.
+- **Crews run short base-rover baselines (under ~5 km) on UHF radio.** The base/rover grade defaults to 5 km, UHF; crews can change both with the 📍 button.
+- **Quizzes are written for field crews:** plain words, real survey terms and numbers (not the 5th-grade Learn-mode style).
+
+### Where the knowledge lives
+| File | What it is |
+|---|---|
+| `docs/weather-and-gps.md` | **The knowledge base.** Six research topics (FPRN, troposphere, ionosphere over Florida, field/equipment effects, weather data sources, survey standards), 132 findings; every claim checked by an independent skeptic (50 confirmed, 61 corrected, 24 unverifiable on the first pass, then 20 of those confirmed and 4 corrected on a recheck, see §9b). Sections 1-8 are safe to teach from; §9 lists what not to quiz on; §10 has the sources. |
+| `docs/app-grading-rules.md` | The two grades' rules in plain words. Keep it in step with `public/js/grading.js` and `public/js/weather.js`. Quiz 9 is written from it. |
+| `docs/field-quizzes.md` | The 10 quizzes, printable, with answer keys and knowledge-base references. |
+| `public/js/quizzes.js` | The same quizzes as data for the app (`{id, title, intro, questions:[{q, choices, answer, why, ref}]}`). |
+| `public/js/wxlearn.js` | The Weather & RTK learning area text (field-crew level). |
+
+### The core ideas a crew should leave with
+1. **RTK only works because the reference and the rover see the same sky.** Weather and space weather hurt through the *difference* between the two ends, and it shows up first in **height** (1 cm of zenith-delay difference ≈ 3 cm of height).
+2. **Two layers.** The ionosphere (space weather) is dispersive, so dual-frequency can measure it; the troposphere (local weather) is not, so it must be modeled or cancel.
+3. **Dry delay** ≈ 2.3 m, smooth, follows pressure, nearly cancels. **Wet delay** 0-0.4 m (Gulf summer ~0.25-0.35 m), patchy and fast-changing: this is the local-weather problem.
+4. **Rain, fog and even humidity on their own do almost nothing.** Gradients from storm cells, sea-breeze fronts, squall lines and cold fronts do the damage; wet trees and wet ground add multipath.
+5. **Network RTK** fits a smooth surface between stations (typically 50-70 km apart). Anything smaller (a storm cell, a sea-breeze front) is invisible to it. Pensacola is at the network's western edge. What fails first is the comms/power chain (cell, caster, station power), then fix rate, then height scatter, then wrong fixes that still say FIXED.
+6. **Own base + rover:** every base error goes into every point; reliable fixing under ~10 km; the "1 ppm" spec is all distance error on a normal day, not a storm limit; a **1-5 km own base is the most storm-resistant setup**; weather that differs between the two ends breaks the cancellation.
+7. **Links:** UHF is not hurt by rain but is by wet foliage and night-time ducting interference; cellular fails in storms through power, backhaul and crowding. In hurricanes, a UHF base keeps working when the network and cell service don't.
+8. **Space weather over Florida:** 1 TECU ≈ 16 cm on L1; 1 TECU per 100 km ≈ 1.6 ppm; storm-enhanced density plumes over the Southeast ~17-23 UT; Pensacola is ~39° magnetic. Thunderstorm and hurricane ionosphere ripples are negligible for RTK.
+9. **Quality control:** FIXED is not proof; watch correction age (NGS recommends ≤ 2 s latency); check shots at the start and end; re-occupy critical points about 4 hours later; RMS specs are roughly half of a 95% figure.
+
+### How the two grades use weather (summary; full rules in docs/app-grading-rules.md)
+- Inputs: NWS gridpoint forecast (thunderstorm chance, dewpoint, wind, pressure), NWS active alerts, SPC day 1-3 categorical outlooks. All free and public domain; both proxies send an identifying User-Agent as NWS asks.
+- Thunder chance or SPC category (whichever is worse), front passage within 3 h, and humid air (dewpoint ≥ 22 °C) as a ×1.5 multiplier. Rain and humidity alone: no penalty.
+- The network takes weather and ionosphere causes fully; the base grade scales them by baseline (weather ×0.5 / ionosphere ×0.6 at 5 km or less, up to full at 10-20 km and more beyond).
+- Thunder over 50% (or SPC enhanced+) holds the network at D; tropical warnings hold the network (and a cell-linked base) at F. A short base holds a survey "go" until Kp 6 (network until Kp 5).
+- **All weather thresholds are engineering judgment, not published standards.** Calibrate them: log each job's check-shot residuals and fix behaviour with the hour's two grades and the weather type, and adjust `WX` in `grading.js` after a few dozen jobs.
+
+### Writing more quizzes (the recipe used for the first 10)
+1. **Source of truth:** `docs/weather-and-gps.md` §1-8 and `docs/app-grading-rules.md` only. Put a reference (e.g. `KB §3.2 [28]`) on every question.
+2. **Never quiz on:** anything in KB §9 (FPRN ports, IP, station count, the 14 km Auto switch, FDOT accuracy figures, NGS RT class tables), even where §9b's recheck confirmed it, until someone reads the live page; and no safety topics unless the owner asks for a safety set.
+3. **Format:** 3-4 choices, exactly one clearly best answer, plausible wrong answers, no "all/none of the above", no double negatives, vary the answer position, a 1-3 sentence "why", no choice letters in the "why".
+4. **Checking:** have one reviewer check accuracy against the KB and another check clarity, then revise; cross-check the whole set for near-duplicates. `test/quizzes.test.js` enforces the format, the no-safety rule, the do-not-quiz list and no repeated questions.
+5. **Ideas for the next sets:** a scenario set built from the crews' own logged jobs ("this was the grade, this is what the rover did"); an FDOT-specific set once someone has read the live FPRN pages (accounts, mountpoints, status map, Auto-iMAX); a set on reading the Local weather card and radar; and, if the owner wants it later, a separate field-safety set.
+
+### Open items
+- **FPRN station status** has no public feed the app can read; the Sources panel links FDOT's FPRN page. If FDOT publishes a status API, add a network-only cap for nearby stations being down.
+- **Better troposphere inputs** (precipitable water, CAPE) exist from Open-Meteo, but its free tier is non-commercial; KJM would need the paid tier. NWS was used instead.
+- **Live lightning (GOES GLM)** and **radar pixels** were not used: they would need server-side decoding, and lightning is a safety matter the owner left out.
+- The weather research ran without direct access to FDOT/NGS/NWS pages (search results only). Before quizzing on anything FDOT-specific, read the live page.
